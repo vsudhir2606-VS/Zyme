@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X } from 'lucide-react';
-import { processExcelFile } from './utils/excelProcessor';
-import { TagInput } from './components/TagInput';
+import { processExcelFile } from './utils/excelProcessor.ts';
+import { TagInput } from './components/TagInput.tsx';
 
 // Default values
 const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY'];
