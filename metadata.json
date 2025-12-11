@@ -1,0 +1,5 @@
+{
+  "name": "ZymeProcessor",
+  "description": "Transforms raw Excel data into structured compliance reports with automated risk detection, match extraction, and status mapping.",
+  "requestFramePermissions": []
+}
