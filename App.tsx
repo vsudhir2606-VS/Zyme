@@ -83,7 +83,15 @@ export default function App() {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Processed_${file?.name || 'Report.xlsx'}`;
+    
+    // Ensure output is always .xlsx because the file content is OpenXML
+    let baseName = file?.name || 'Report';
+    const lastDotIndex = baseName.lastIndexOf('.');
+    if (lastDotIndex !== -1) {
+      baseName = baseName.substring(0, lastDotIndex);
+    }
+    a.download = `Processed_${baseName}.xlsx`;
+    
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
@@ -276,7 +284,7 @@ export default function App() {
                     </div>
                     <h3 className="text-2xl font-bold text-slate-800 mb-2">Upload Excel File</h3>
                     <p className="text-slate-500 text-sm max-w-sm mx-auto">
-                      Drag and drop your <span className="font-mono text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">.xlsx</span> file here to begin the automated compliance scan.
+                      Drag and drop your <span className="font-mono text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">.xlsx / .xls</span> file here to begin the automated compliance scan.
                     </p>
                   </div>
 
@@ -291,7 +299,12 @@ export default function App() {
                       ${processing ? 'pointer-events-none opacity-80' : ''}
                     `}
                   >
-                    <input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleFileChange} />
+                    <input 
+                      type="file" 
+                      className="hidden" 
+                      accept=".xlsx, .xls, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" 
+                      onChange={handleFileChange} 
+                    />
                     
                     {file ? (
                       <div className="flex flex-col items-center animate-in fade-in zoom-in duration-300">
