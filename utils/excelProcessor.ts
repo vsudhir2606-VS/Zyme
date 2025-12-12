@@ -67,8 +67,10 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
         const processedRows = [newHeader];
 
-        // Iterate rows, skipping header (index 0)
-        for (let i = 1; i < jsonData.length; i++) {
+        // Iterate rows, starting from index 0 (Row 1) to capture all data
+        // If the original file has headers, they will be processed as a data row (usually row 0)
+        // This ensures that if the file has NO headers (data starts at row 1), nothing is skipped.
+        for (let i = 0; i < jsonData.length; i++) {
           const rawRow = jsonData[i];
           if (!rawRow || rawRow.length === 0) continue;
 
@@ -105,8 +107,6 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           );
 
           // Apply Priority Logic
-          // 1. High Risk overrides others? Or just "if matched".
-          // We will apply a strict priority order based on typical compliance logic unless specified otherwise.
           // Order: High Risk > APRV > ZKWD/ZEMB > No Add > SPL
           
           if (isHighRisk) {
@@ -125,8 +125,6 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
           // --- Logic for Data Extraction (Match Name / Denial Type) ---
           const textToSearch = (rawW + "|" + rawAA).replace(/\|+/g, '|'); // Normalize pipes just in case
-          // Actually, raw concatenation might be safer:
-          // The format is `key=value|`. Concatenating W and AA might merge `|` from W and start of AA.
           const rawCombined = rawW + " " + rawAA;
 
           const matchNames = extractValues(rawCombined, "matchname");
