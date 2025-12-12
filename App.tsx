@@ -5,7 +5,12 @@ import { TagInput } from './components/TagInput.tsx';
 
 // Default values
 const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY'];
-const DEFAULT_RISK_KEYWORDS = ['SANCTION', 'EMBARGO', 'DENIED'];
+const DEFAULT_RISK_KEYWORDS = [
+  'SANCTION', 'EMBARGO', 'DENIED',
+  'Lockheed', 'Raytheon', 'Northrop', 'Bae', 'RTX', 'United Technologies', 'UTC', 'Rockwell',
+  'Kharon', 'Alliant', 'AeroVironment', 'ViaSat', 'Data Link Solution', 'Projectina AG',
+  'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
+];
 
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
