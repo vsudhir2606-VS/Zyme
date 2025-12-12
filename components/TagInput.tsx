@@ -1,5 +1,5 @@
 import React, { useState, KeyboardEvent, ClipboardEvent } from 'react';
-import { X, Plus } from 'lucide-react';
+import { X, Plus, Copy, Check } from 'lucide-react';
 
 interface TagInputProps {
   tags: string[];
@@ -11,6 +11,7 @@ interface TagInputProps {
 export const TagInput: React.FC<TagInputProps> = ({ tags, onChange, placeholder, label }) => {
   const [inputValue, setInputValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === ',') {
@@ -48,12 +49,34 @@ export const TagInput: React.FC<TagInputProps> = ({ tags, onChange, placeholder,
     onChange(tags.filter(tag => tag !== tagToRemove));
   };
 
+  const handleCopyAll = () => {
+    if (tags.length === 0) return;
+    const textToCopy = tags.join(', ');
+    navigator.clipboard.writeText(textToCopy);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
     <div className="w-full space-y-2">
-      {label && <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</label>}
+      <div className="flex items-center justify-between">
+        {label && <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</label>}
+        
+        {tags.length > 0 && (
+          <button 
+            onClick={handleCopyAll}
+            className="flex items-center gap-1.5 text-[10px] text-slate-500 hover:text-indigo-400 transition-colors px-2 py-1 rounded-md hover:bg-slate-800/50"
+            title="Copy all values"
+          >
+            {copied ? <Check size={12} className="text-emerald-500" /> : <Copy size={12} />}
+            {copied ? <span className="text-emerald-500">Copied</span> : <span>Copy All</span>}
+          </button>
+        )}
+      </div>
+
       <div 
         className={`
-          relative flex flex-wrap gap-2 p-2.5 border rounded-xl min-h-[50px] transition-all duration-200 bg-slate-900/40
+          relative flex flex-wrap gap-2 p-2.5 border rounded-xl min-h-[50px] max-h-60 overflow-y-auto transition-all duration-200 bg-slate-900/40 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent
           ${isFocused 
             ? 'border-indigo-500/50 ring-2 ring-indigo-500/20' 
             : 'border-slate-700/50 hover:border-slate-600'
@@ -61,7 +84,7 @@ export const TagInput: React.FC<TagInputProps> = ({ tags, onChange, placeholder,
         `}
       >
         {tags.map((tag) => (
-          <span key={tag} className="animate-in fade-in zoom-in duration-200 inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 shadow-sm">
+          <span key={tag} className="animate-in fade-in zoom-in duration-200 inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 shadow-sm whitespace-nowrap">
             {tag}
             <button
               type="button"
@@ -81,13 +104,13 @@ export const TagInput: React.FC<TagInputProps> = ({ tags, onChange, placeholder,
           onBlur={addTag}
           onFocus={() => setIsFocused(true)}
           onBlurCapture={() => setIsFocused(false)}
-          className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-slate-200 placeholder-slate-600 font-medium"
+          className="flex-1 min-w-[120px] bg-transparent outline-none text-sm text-slate-200 placeholder-slate-600 font-medium h-7"
           placeholder={tags.length === 0 ? placeholder : ''}
         />
         
         {/* Visual hint for enter key if typing */}
         {inputValue && (
-          <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:flex pointer-events-none animate-in fade-in">
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden sm:flex pointer-events-none animate-in fade-in sticky">
              <div className="bg-slate-700/50 text-slate-400 text-[10px] px-1.5 py-0.5 rounded border border-slate-600">Enter</div>
           </div>
         )}
