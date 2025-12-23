@@ -5,15 +5,22 @@ export interface ProcessConfig {
   aprvCodes: string[];
 }
 
+/**
+ * Safely extracts a cell value as a trimmed string.
+ */
 const getCellValue = (row: any[], index: number): string => {
-  return row[index] !== undefined && row[index] !== null ? String(row[index]).trim() : '';
+  if (!row || index < 0 || index >= row.length) return '';
+  const val = row[index];
+  if (val === undefined || val === null) return '';
+  return String(val).trim();
 };
 
+/**
+ * Extracts multiple values from a string based on key=value| pattern.
+ */
 const extractValues = (text: string, key: string): string[] => {
-  // Regex looks for key=value|
-  // We assume the value cannot contain |
-  // We make the | optional for the last item if the string ends abruptly, though user specified ends with |
-  const regex = new RegExp(`${key}=([^|]+)\\|`, 'g');
+  // Uses 'gi' for case-insensitive and global matching
+  const regex = new RegExp(`${key}=([^|]+)\\|`, 'gi');
   const matches: string[] = [];
   let match;
   while ((match = regex.exec(text)) !== null) {
@@ -24,6 +31,9 @@ const extractValues = (text: string, key: string): string[] => {
   return matches;
 };
 
+/**
+ * Processes various Excel formats and returns a modern .xlsx buffer.
+ */
 export const processExcelFile = async (file: File, config: ProcessConfig): Promise<Uint8Array> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -31,84 +41,96 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
-        const workbook = XLSX.read(data, { type: 'array' });
+        if (!data) throw new Error("Could not read file data");
+
+        // Use Uint8Array for best compatibility across .xls, .xlsx, .csv, and .html formats
+        const workbook = XLSX.read(new Uint8Array(data as ArrayBuffer), { 
+          type: 'array',
+          cellDates: true, 
+          cellNF: true,    
+          cellText: true,  
+          raw: false       
+        });
         
-        // Assume first sheet
+        if (!workbook.SheetNames.length) {
+          throw new Error("The Excel file contains no readable sheets.");
+        }
+
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
         // Convert to array of arrays (header: 1 means array of arrays)
-        const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { 
+          header: 1, 
+          defval: "", 
+          blankrows: false 
+        });
 
         if (jsonData.length === 0) {
-          throw new Error("Excel file is empty");
+          throw new Error("The selected Excel sheet is empty.");
         }
 
-        // Prepare new data structure
-        // Header Row
+        // Define the output header structure including new Splid columns
         const newHeader = [
-          "Status",           // A: Final Status
-          "File name",        // B: Source C
-          "Ref No",           // C: Source D
-          "Customer Name",    // D: Source I
-          "City",             // E: Source L
-          "CTR",              // F: Source O
-          "RPL 1",            // G: Match Name 1
+          "Status",           // A: Calculated status
+          "File name",        // B: From Input Column C (index 2)
+          "Ref No",           // C: From Input Column D (index 3)
+          "Customer Name",    // D: From Input Column I (index 8)
+          "City",             // E: From Input Column L (index 11)
+          "CTR",              // F: From Input Column O (index 14)
+          "RPL 1",            // G: Extracted Match Name 1
           "RPL 2",            // H: Match Name 2
           "RPL 3",            // I: Match Name 3
           "RPL 4",            // J: Match Name 4
           "RPL 5",            // K: Match Name 5
-          "Denial Type 1",    // L
-          "Denial Type 2",    // M
-          "Denial Type 3",    // N
-          "Denial Type 4",    // O
-          "Denial Type 5",    // P
+          "Denial Type 1",    // L: Extracted Denial Type 1
+          "Denial Type 2",    // M: Denial Type 2
+          "Denial Type 3",    // N: Denial Type 3
+          "Denial Type 4",    // O: Denial Type 4
+          "Denial Type 5",    // P: Denial Type 5
+          "Splid 1",          // Q: Extracted Splid 1
+          "Splid 2",          // R: Extracted Splid 2
+          "Splid 3",          // S: Extracted Splid 3
+          "Splid 4",          // T: Extracted Splid 4
+          "Splid 5",          // U: Extracted Splid 5
         ];
 
-        const processedRows = [newHeader];
+        const processedRows: any[][] = [newHeader];
 
-        // Iterate rows, starting from index 0 (Row 1) to capture all data
-        // If the original file has headers, they will be processed as a data row (usually row 0)
-        // This ensures that if the file has NO headers (data starts at row 1), nothing is skipped.
+        // Process every row starting from index 0 to ensure the first row is visible
         for (let i = 0; i < jsonData.length; i++) {
           const rawRow = jsonData[i];
           if (!rawRow || rawRow.length === 0) continue;
 
-          // Helper to get raw column by Excel index (0-based: A=0, B=1, C=2...)
-          const rawC = getCellValue(rawRow, 2);  // File name
-          const rawD = getCellValue(rawRow, 3);  // Ref No
-          const rawI = getCellValue(rawRow, 8);  // Customer Name
-          const rawJ = getCellValue(rawRow, 9);
-          const rawK = getCellValue(rawRow, 10);
-          const rawL = getCellValue(rawRow, 11); // City
-          const rawO = getCellValue(rawRow, 14); // CTR
-          const rawW = getCellValue(rawRow, 22);
-          const rawAA = getCellValue(rawRow, 26);
+          // Mapping logic (Excel Col -> Index): A=0, B=1, C=2, D=3...
+          const rawC = getCellValue(rawRow, 2);  // Column C
+          const rawD = getCellValue(rawRow, 3);  // Column D
+          const rawI = getCellValue(rawRow, 8);  // Column I (Customer Name)
+          const rawL = getCellValue(rawRow, 11); // Column L (City)
+          const rawO = getCellValue(rawRow, 14); // Column O (CTR)
+          const rawW = getCellValue(rawRow, 22); // Column W (Search Data)
+          const rawAA = getCellValue(rawRow, 26); // Column AA (Search Data)
 
-          // --- Logic for Column A (Status) ---
-          let status = "SPL"; // Default
-          
-          // Precompute flags
+          // Status Determination Logic
+          let status = "SPL";
           const combinedSearchText = (rawW + " " + rawAA).toUpperCase();
           const hasZKWD = combinedSearchText.includes("ZKWD");
           const hasZEMB = combinedSearchText.includes("ZEMB");
           
-          const isNoAdd = rawJ === "" && rawK === "" && rawL === "" && rawO === "";
+          // Updated "No add" condition: Only Columns L and O are blank
+          const isNoAdd = rawL === "" && rawO === "";
           
-          // Check High Risk Keywords (Case insensitive partial match in Customer Name)
+          // Case-insensitive partial match for High Risk Keywords in Customer Name
           const isHighRisk = config.highRiskKeywords.some(kw => 
             kw && rawI.toLowerCase().includes(kw.toLowerCase())
           );
           
-          // Check APRV (Exact match in CTR column rawO)
-          // User listed codes: RU, UA, NI, VE, BY, CU, IR, KP, SY
+          // Exact match for APRV codes in CTR column (Column O)
           const isAPRV = config.aprvCodes.some(code => 
             code && rawO.toUpperCase() === code.toUpperCase()
           );
 
-          // Apply Priority Logic
-          // Order: High Risk > APRV > ZKWD/ZEMB > No Add > SPL
-          
+          // Priority sorting logic
           if (isHighRisk) {
             status = "High Risk";
           } else if (isAPRV) {
@@ -123,51 +145,55 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
             status = "SPL";
           }
 
-          // --- Logic for Data Extraction (Match Name / Denial Type) ---
-          const textToSearch = (rawW + "|" + rawAA).replace(/\|+/g, '|'); // Normalize pipes just in case
-          const rawCombined = rawW + " " + rawAA;
-
+          // Extraction of Match Names, Denial Types, and Splids
+          // We combine with pipes to handle search logic effectively
+          const rawCombined = `${rawW}|${rawAA}|`;
           const matchNames = extractValues(rawCombined, "matchname");
           const denialTypes = extractValues(rawCombined, "denialtype");
+          const splids = extractValues(rawCombined, "splid");
 
-          // --- Construct Final Row ---
           const newRow = [
-            status,             // A
-            rawC,               // B
-            rawD,               // C
-            rawI,               // D
-            rawL,               // E
-            rawO,               // F
-            matchNames[0] || "", // G
-            matchNames[1] || "", // H
-            matchNames[2] || "", // I
-            matchNames[3] || "", // J
-            matchNames[4] || "", // K
-            denialTypes[0] || "", // L
-            denialTypes[1] || "", // M
-            denialTypes[2] || "", // N
-            denialTypes[3] || "", // O
-            denialTypes[4] || "", // P
+            status,                // A
+            rawC,                  // B
+            rawD,                  // C
+            rawI,                  // D
+            rawL,                  // E
+            rawO,                  // F
+            matchNames[0] || "",   // G
+            matchNames[1] || "",   // H
+            matchNames[2] || "",   // I
+            matchNames[3] || "",   // J
+            matchNames[4] || "",   // K
+            denialTypes[0] || "",  // L
+            denialTypes[1] || "",  // M
+            denialTypes[2] || "",  // N
+            denialTypes[3] || "",  // O
+            denialTypes[4] || "",  // P
+            splids[0] || "",       // Q
+            splids[1] || "",       // R
+            splids[2] || "",       // S
+            splids[3] || "",       // T
+            splids[4] || "",       // U
           ];
 
           processedRows.push(newRow);
         }
 
-        // Create new workbook
+        // Export as modern .xlsx for maximum compatibility
         const newWs = XLSX.utils.aoa_to_sheet(processedRows);
         const newWb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(newWb, newWs, "Processed Report");
 
-        // Write to buffer
         const wbout = XLSX.write(newWb, { bookType: 'xlsx', type: 'array' });
-        resolve(wbout);
+        resolve(new Uint8Array(wbout));
 
       } catch (err) {
-        reject(err);
+        console.error("Excel Processing Error:", err);
+        reject(err instanceof Error ? err : new Error("Failed to process Excel file"));
       }
     };
 
-    reader.onerror = (error) => reject(error);
+    reader.onerror = () => reject(new Error("File reading failed"));
     reader.readAsArrayBuffer(file);
   });
 };
