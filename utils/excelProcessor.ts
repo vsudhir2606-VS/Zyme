@@ -17,8 +17,10 @@ const getCellValue = (row: any[], index: number): string => {
 
 /**
  * Extracts multiple values from a string based on key=value| pattern.
+ * Supports keys like 'matchname', 'denialtype', and 'splid'.
  */
 const extractValues = (text: string, key: string): string[] => {
+  // Pattern matches key=something| where something doesn't contain |
   // Uses 'gi' for case-insensitive and global matching
   const regex = new RegExp(`${key}=([^|]+)\\|`, 'gi');
   const matches: string[] = [];
@@ -32,7 +34,8 @@ const extractValues = (text: string, key: string): string[] => {
 };
 
 /**
- * Processes various Excel formats and returns a modern .xlsx buffer.
+ * Processes various Excel formats (.xlsx, .xls, .xlsm, .xlsb, .csv) 
+ * and returns a modern .xlsx buffer.
  */
 export const processExcelFile = async (file: File, config: ProcessConfig): Promise<Uint8Array> => {
   return new Promise((resolve, reject) => {
@@ -43,7 +46,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         const data = e.target?.result;
         if (!data) throw new Error("Could not read file data");
 
-        // Use Uint8Array for best compatibility across .xls, .xlsx, .csv, and .html formats
+        // Use Uint8Array for maximum format compatibility (XLSX, XLS, CSV, etc.)
         const workbook = XLSX.read(new Uint8Array(data as ArrayBuffer), { 
           type: 'array',
           cellDates: true, 
@@ -53,7 +56,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         });
         
         if (!workbook.SheetNames.length) {
-          throw new Error("The Excel file contains no readable sheets.");
+          throw new Error("The file contains no readable sheets.");
         }
 
         const sheetName = workbook.SheetNames[0];
@@ -67,10 +70,10 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         });
 
         if (jsonData.length === 0) {
-          throw new Error("The selected Excel sheet is empty.");
+          throw new Error("The selected file is empty.");
         }
 
-        // Define the output header structure including new Splid columns
+        // Define the output header structure
         const newHeader = [
           "Status",           // A: Calculated status
           "File name",        // B: From Input Column C (index 2)
@@ -97,12 +100,12 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
         const processedRows: any[][] = [newHeader];
 
-        // Process every row starting from index 0 to ensure the first row is visible
+        // Process every row starting from index 0
         for (let i = 0; i < jsonData.length; i++) {
           const rawRow = jsonData[i];
           if (!rawRow || rawRow.length === 0) continue;
 
-          // Mapping logic (Excel Col -> Index): A=0, B=1, C=2, D=3...
+          // Mapping logic (Raw Column -> Index): C=2, D=3, I=8, L=11, O=14, W=22, AA=26
           const rawC = getCellValue(rawRow, 2);  // Column C
           const rawD = getCellValue(rawRow, 3);  // Column D
           const rawI = getCellValue(rawRow, 8);  // Column I (Customer Name)
@@ -117,7 +120,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           const hasZKWD = combinedSearchText.includes("ZKWD");
           const hasZEMB = combinedSearchText.includes("ZEMB");
           
-          // Updated "No add" condition: Only Columns L and O are blank
+          // Updated "No add" condition: Only Columns L (City) and O (CTR) are blank
           const isNoAdd = rawL === "" && rawO === "";
           
           // Case-insensitive partial match for High Risk Keywords in Customer Name
@@ -146,7 +149,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           }
 
           // Extraction of Match Names, Denial Types, and Splids
-          // We combine with pipes to handle search logic effectively
+          // Combine W and AA with terminators to ensure clean extraction
           const rawCombined = `${rawW}|${rawAA}|`;
           const matchNames = extractValues(rawCombined, "matchname");
           const denialTypes = extractValues(rawCombined, "denialtype");
@@ -179,7 +182,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           processedRows.push(newRow);
         }
 
-        // Export as modern .xlsx for maximum compatibility
+        // Export as modern .xlsx regardless of input format (CSV -> XLSX conversion)
         const newWs = XLSX.utils.aoa_to_sheet(processedRows);
         const newWb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(newWb, newWs, "Processed Report");
@@ -189,7 +192,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
       } catch (err) {
         console.error("Excel Processing Error:", err);
-        reject(err instanceof Error ? err : new Error("Failed to process Excel file"));
+        reject(err instanceof Error ? err : new Error("Failed to process file. Ensure it is a valid Excel or CSV document."));
       }
     };
 
