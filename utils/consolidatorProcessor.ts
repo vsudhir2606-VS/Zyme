@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import * as XLSX from 'xlsx';
+import { read, utils } from 'xlsx';
 
 export interface ConsolidationResult {
   data: Uint8Array;
@@ -41,13 +41,13 @@ export const consolidateFiles = async (files: File[]): Promise<ConsolidationResu
 
   for (const file of files) {
     const data = await file.arrayBuffer();
-    const tempWb = XLSX.read(new Uint8Array(data), { type: 'array' });
+    const tempWb = read(new Uint8Array(data), { type: 'array' });
     
     if (!tempWb.SheetNames.length) continue;
 
     const sheetName = tempWb.SheetNames[0];
     const worksheet = tempWb.Sheets[sheetName];
-    const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+    const jsonData: any[][] = utils.sheet_to_json(worksheet, { header: 1, defval: "" });
 
     if (jsonData.length === 0) continue;
 

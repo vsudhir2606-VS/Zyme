@@ -4,6 +4,8 @@ import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
 
+import { InventoryReport } from './components/InventoryReport.tsx';
+
 // Default values
 const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY'];
 const DEFAULT_RISK_KEYWORDS = [
@@ -13,7 +15,7 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'consolidator';
+type AppTab = 'processor' | 'consolidator' | 'inventory';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
@@ -96,6 +98,13 @@ export default function App() {
             >
               <Layers size={18} />
               <span className="text-sm font-semibold">Zyme Consolidator</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('inventory')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'inventory' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
+            >
+              <FileText size={18} />
+              <span className="text-sm font-semibold">Inventory Report</span>
             </button>
           </div>
 
@@ -219,12 +228,14 @@ export default function App() {
         <header className="relative z-10 px-8 py-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-white/20">
           <div>
             <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
-              {activeTab === 'processor' ? 'Data Processing' : 'Data Consolidation'}
+              {activeTab === 'processor' ? 'Data Processing' : activeTab === 'consolidator' ? 'Data Consolidation' : 'Inventory Reporting'}
             </h2>
             <p className="text-slate-500 text-sm font-medium">
               {activeTab === 'processor' 
                 ? 'Manage and transform your compliance datasets' 
-                : 'Merge multiple reports into a master dataset'}
+                : activeTab === 'consolidator'
+                ? 'Merge multiple reports into a master dataset'
+                : 'Generate daily inventory status comments from Excel files'}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -241,8 +252,10 @@ export default function App() {
         {/* Center Content */}
         {activeTab === 'processor' ? (
           <Processor highRiskKeywords={highRiskKeywords} aprvCodes={aprvCodes} />
-        ) : (
+        ) : activeTab === 'consolidator' ? (
           <Consolidator />
+        ) : (
+          <InventoryReport />
         )}
       </main>
     </div>
