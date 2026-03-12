@@ -53,12 +53,12 @@ export const consolidateFiles = async (files: File[]): Promise<ConsolidationResu
 
     // --- Process Sheet 1 (Full Consolidation) ---
     // Requirement: headers not required for Sheet 1
-    // Skip the first row (header) of every file
-    jsonData.slice(1).forEach(row => sheet1.addRow(row));
+    // Include all rows including the first one
+    jsonData.forEach(row => sheet1.addRow(row));
 
     // --- Process Sheet 2 (Specific Mapping) ---
-    // Skip headers of the source file
-    for (let i = 1; i < jsonData.length; i++) {
+    // Include all rows including the first one
+    for (let i = 0; i < jsonData.length; i++) {
       const row = jsonData[i];
       
       // Mapping as per requirements:

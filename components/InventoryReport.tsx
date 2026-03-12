@@ -40,8 +40,8 @@ export const InventoryReport: React.FC = () => {
       // Use header: 1 to get an array of arrays (rows)
       const rows = xlsxUtils.sheet_to_json(worksheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' }) as any[][];
       
-      // Remove header row (Row 1)
-      let dataRows = rows.slice(1);
+      // Include all rows including the first one
+      let dataRows = rows;
 
       // Filter metrics file by present day data in Column C (index 2)
       if (type === 'metrics') {
