@@ -119,25 +119,10 @@ export const InventoryReport: React.FC = () => {
   const generateReport = () => {
     if (!metricsFile || !statusFile) return;
 
-    // Escalations logic: Data from Metrics file Column I (index 8) based on Column D (index 3)
-    const getMetricsEscalations = (dataRows: any[][]) => {
-      const counts = { APJ: 0, AMS: 0, EMEA: 0 };
-      dataRows.forEach(row => {
-        const fileName = String(row[3] || '').toUpperCase();
-        const escalationVal = parseFloat(String(row[8] || '').replace(/,/g, '')) || 0;
-        
-        if (fileName.includes('_APJ_')) counts.APJ += escalationVal;
-        else if (fileName.includes('_AMS_')) counts.AMS += escalationVal;
-        else if (fileName.includes('_EMEA_')) counts.EMEA += escalationVal;
-      });
-      return counts;
-    };
-
-    const totalEscalations = getMetricsEscalations(metricsFile.rows);
-
     // Regional Table Logic
     const regions = ['APJ', 'AMS', 'EMEA'];
     const stats: Record<string, any> = {};
+    const totalEscalations = { APJ: 0, AMS: 0, EMEA: 0 };
     
     regions.forEach(r => {
       stats[r] = {
@@ -151,38 +136,86 @@ export const InventoryReport: React.FC = () => {
       };
     });
 
-    // From Status File (Received)
+    const statusFileNames = new Set<string>();
     statusFile.rows.forEach(row => {
-      const fileName = String(row[0] || '').toUpperCase();
+      const fileName = String(row[0] || '').trim().toUpperCase();
+      if (fileName) statusFileNames.add(fileName);
+    });
+
+    const metricsFileNames = new Set<string>();
+    metricsFile.rows.forEach(row => {
+      const fileName = String(row[3] || '').trim().toUpperCase();
+      if (fileName) metricsFileNames.add(fileName);
+    });
+
+    const uniqueReceivedFiles = new Set<string>();
+    const uniqueReleasedFiles = new Set<string>();
+
+    // Process Status File
+    statusFile.rows.forEach(row => {
+      const fileName = String(row[0] || '').trim().toUpperCase();
+      if (!fileName) return;
+
       let region = '';
       if (fileName.includes('_APJ_') || fileName.includes('APJ')) region = 'APJ';
       else if (fileName.includes('_AMS_') || fileName.includes('AMS') || fileName.includes('AMER')) region = 'AMS';
       else if (fileName.includes('_EMEA_') || fileName.includes('EMEA')) region = 'EMEA';
 
       if (region) {
-        stats[region].receivedFiles++;
         const transVal = parseFloat(String(row[2] || '').replace(/,/g, '')) || 0;
+        
+        // Add to Received stats (Unique file count)
+        if (!uniqueReceivedFiles.has(fileName)) {
+          stats[region].receivedFiles++;
+          uniqueReceivedFiles.add(fileName);
+        }
         stats[region].receivedTransactions += transVal;
+
+        // If it's also in metrics, it's released (cleared)
+        if (metricsFileNames.has(fileName)) {
+          if (!uniqueReleasedFiles.has(fileName)) {
+            stats[region].releasedFiles++;
+            uniqueReleasedFiles.add(fileName);
+          }
+          stats[region].releasedTransactions += transVal;
+        }
       }
     });
 
-    // From Metrics File (Released and also adds to Received)
+    // Process Metrics File
     metricsFile.rows.forEach(row => {
-      const fileName = String(row[3] || '').toUpperCase(); // Column D
+      const fileName = String(row[3] || '').trim().toUpperCase(); // Column D
+      if (!fileName) return;
+
       let region = '';
       if (fileName.includes('_APJ_')) region = 'APJ';
       else if (fileName.includes('_AMS_')) region = 'AMS';
       else if (fileName.includes('_EMEA_')) region = 'EMEA';
 
       if (region) {
-        // Released stats: Count from Metrics Column D (index 3) and Value from Column G (index 6)
-        stats[region].releasedFiles++;
         const transVal = parseFloat(String(row[6] || '').replace(/,/g, '')) || 0;
-        stats[region].releasedTransactions += transVal;
-        
-        // Add to Received stats as per user request (Received = Status + Metrics)
-        stats[region].receivedFiles++;
+        const escalationVal = parseFloat(String(row[8] || '').replace(/,/g, '')) || 0;
+
+        // Add to Received stats (Unique file count)
+        if (!uniqueReceivedFiles.has(fileName)) {
+          stats[region].receivedFiles++;
+          uniqueReceivedFiles.add(fileName);
+        }
         stats[region].receivedTransactions += transVal;
+        
+        // Add to Released stats (Unique file count)
+        if (!uniqueReleasedFiles.has(fileName)) {
+          stats[region].releasedFiles++;
+          uniqueReleasedFiles.add(fileName);
+        }
+        stats[region].releasedTransactions += transVal;
+
+        // Escalation logic: Only if NOT in status file
+        if (!statusFileNames.has(fileName)) {
+          if (region === 'APJ') totalEscalations.APJ += escalationVal;
+          else if (region === 'AMS') totalEscalations.AMS += escalationVal;
+          else if (region === 'EMEA') totalEscalations.EMEA += escalationVal;
+        }
       }
     });
 
