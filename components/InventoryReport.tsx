@@ -17,6 +17,39 @@ export const InventoryReport: React.FC = () => {
   const [regionalStats, setRegionalStats] = useState<any[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const parseZymeNumber = (val: any): number => {
+    if (val === undefined || val === null || val === '') return 0;
+    const str = String(val).trim();
+    if (!str) return 0;
+    
+    // Handle the specific case where . is used as a thousands separator (e.g., 1.100 -> 1100)
+    // If the string has a dot followed by 3 digits, or multiple dots, treat dots as separators.
+    // If it has both . and ,, determine which is the decimal based on position.
+    if (str.includes('.') && str.includes(',')) {
+      const dotIdx = str.lastIndexOf('.');
+      const commaIdx = str.lastIndexOf(',');
+      if (dotIdx < commaIdx) {
+        // . is thousands, , is decimal
+        return parseFloat(str.replace(/\./g, '').replace(',', '.')) || 0;
+      } else {
+        // , is thousands, . is decimal
+        return parseFloat(str.replace(/,/g, '')) || 0;
+      }
+    }
+    
+    // If it only has dots and matches thousands pattern (e.g. 1.100 or 1.100.000)
+    if (str.includes('.') && !str.includes(',')) {
+      // If it looks like a thousands format (e.g., 1.100, 12.345, 1.234.567)
+      // We'll treat the dot as a thousands separator if it's followed by 3 digits
+      if (/\.\d{3}/.test(str)) {
+        return parseFloat(str.replace(/\./g, '')) || 0;
+      }
+    }
+
+    // Default: remove commas, treat dot as decimal
+    return parseFloat(str.replace(/,/g, '')) || 0;
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'metrics' | 'status') => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -86,12 +119,7 @@ export const InventoryReport: React.FC = () => {
       // Transactions: sum of values in Column G (index 6) for metrics, Column C (index 2) for status
       const transColIndex = type === 'metrics' ? 6 : 2;
       const transactionSum = dataRows.reduce((sum, row) => {
-        const rawVal = row[transColIndex];
-        if (rawVal === undefined || rawVal === null) return sum;
-        
-        const valStr = String(rawVal).replace(/,/g, '');
-        const val = parseFloat(valStr);
-        return sum + (isNaN(val) ? 0 : val);
+        return sum + parseZymeNumber(row[transColIndex]);
       }, 0);
 
       const fileData: FileData = {
@@ -162,7 +190,7 @@ export const InventoryReport: React.FC = () => {
       else if (fileName.includes('_EMEA_') || fileName.includes('EMEA')) region = 'EMEA';
 
       if (region) {
-        const transVal = parseFloat(String(row[2] || '').replace(/,/g, '')) || 0;
+        const transVal = parseZymeNumber(row[2]);
         
         // Add to Received stats (Unique file count)
         if (!uniqueReceivedFiles.has(fileName)) {
@@ -193,8 +221,8 @@ export const InventoryReport: React.FC = () => {
       else if (fileName.includes('_EMEA_')) region = 'EMEA';
 
       if (region) {
-        const transVal = parseFloat(String(row[6] || '').replace(/,/g, '')) || 0;
-        const escalationVal = parseFloat(String(row[8] || '').replace(/,/g, '')) || 0;
+        const transVal = parseZymeNumber(row[6]);
+        const escalationVal = parseZymeNumber(row[8]);
 
         // Add to Received stats (Unique file count)
         if (!uniqueReceivedFiles.has(fileName)) {
