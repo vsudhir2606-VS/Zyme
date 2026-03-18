@@ -199,14 +199,8 @@ export const InventoryReport: React.FC = () => {
         }
         stats[region].receivedTransactions += transVal;
 
-        // If it's also in metrics, it's released (cleared)
-        if (metricsFileNames.has(fileName)) {
-          if (!uniqueReleasedFiles.has(fileName)) {
-            stats[region].releasedFiles++;
-            uniqueReleasedFiles.add(fileName);
-          }
-          stats[region].releasedTransactions += transVal;
-        }
+        // If it's in status file, it's considered pending, so we don't add to released stats here
+        // even if it exists in metricsFileNames.
       }
     });
 
@@ -231,12 +225,14 @@ export const InventoryReport: React.FC = () => {
         }
         stats[region].receivedTransactions += transVal;
         
-        // Add to Released stats (Unique file count)
-        if (!uniqueReleasedFiles.has(fileName)) {
-          stats[region].releasedFiles++;
-          uniqueReleasedFiles.add(fileName);
+        // Add to Released stats (Unique file count) ONLY if NOT in status file
+        if (!statusFileNames.has(fileName)) {
+          if (!uniqueReleasedFiles.has(fileName)) {
+            stats[region].releasedFiles++;
+            uniqueReleasedFiles.add(fileName);
+          }
+          stats[region].releasedTransactions += transVal;
         }
-        stats[region].releasedTransactions += transVal;
 
         // Escalation logic: Only if NOT in status file
         if (!statusFileNames.has(fileName)) {
