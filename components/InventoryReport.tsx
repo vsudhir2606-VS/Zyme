@@ -170,16 +170,16 @@ export const InventoryReport: React.FC = () => {
       if (fileName) statusFileNames.add(fileName);
     });
 
-    const metricsFileNames = new Set<string>();
-    metricsFile.rows.forEach(row => {
-      const fileName = String(row[3] || '').trim().toUpperCase();
-      if (fileName) metricsFileNames.add(fileName);
-    });
+    // Use a Map to track unique files and their best data
+    // This avoids double counting when files exist in both metrics and status
+    const fileDataMap = new Map<string, { 
+      region: string, 
+      transVal: number, 
+      isApproved: boolean, 
+      escalationVal: number 
+    }>();
 
-    const uniqueReceivedFiles = new Set<string>();
-    const uniqueReleasedFiles = new Set<string>();
-
-    // Process Status File
+    // 1. Process Status File first (as baseline for pending files)
     statusFile.rows.forEach(row => {
       const fileName = String(row[0] || '').trim().toUpperCase();
       if (!fileName) return;
@@ -191,23 +191,34 @@ export const InventoryReport: React.FC = () => {
 
       if (region) {
         const transVal = parseZymeNumber(row[2]);
-        
-        // Add to Received stats (Unique file count)
-        if (!uniqueReceivedFiles.has(fileName)) {
-          stats[region].receivedFiles++;
-          uniqueReceivedFiles.add(fileName);
-        }
-        stats[region].receivedTransactions += transVal;
-
-        // If it's in status file, it's considered pending, so we don't add to released stats here
-        // even if it exists in metricsFileNames.
+        fileDataMap.set(fileName, {
+          region,
+          transVal,
+          isApproved: false,
+          escalationVal: 0
+        });
       }
     });
 
-    // Process Metrics File
+    // 2. Process Metrics File (overwrites or adds to the map)
+    // Group metrics rows by fileName to handle duplicates
+    const metricsGroups = new Map<string, any[]>();
     metricsFile.rows.forEach(row => {
-      const fileName = String(row[3] || '').trim().toUpperCase(); // Column D
+      const fileName = String(row[3] || '').trim().toUpperCase();
       if (!fileName) return;
+      if (!metricsGroups.has(fileName)) metricsGroups.set(fileName, []);
+      metricsGroups.get(fileName)!.push(row);
+    });
+
+    metricsGroups.forEach((rows, fileName) => {
+      // Find if any row has "Approved Entries"
+      const approvedRow = rows.find(row => 
+        row.some(cell => String(cell || '').toLowerCase().includes('approved entries'))
+      );
+      
+      // If duplicates exist, prioritize the approved row, otherwise take the first one
+      const rowToUse = approvedRow || rows[0];
+      const isApproved = !!approvedRow;
 
       let region = '';
       if (fileName.includes('_APJ_')) region = 'APJ';
@@ -215,31 +226,38 @@ export const InventoryReport: React.FC = () => {
       else if (fileName.includes('_EMEA_')) region = 'EMEA';
 
       if (region) {
-        const transVal = parseZymeNumber(row[6]);
-        const escalationVal = parseZymeNumber(row[8]);
-
-        // Add to Received stats (Unique file count)
-        if (!uniqueReceivedFiles.has(fileName)) {
-          stats[region].receivedFiles++;
-          uniqueReceivedFiles.add(fileName);
-        }
-        stats[region].receivedTransactions += transVal;
+        const transVal = parseZymeNumber(rowToUse[6]);
+        const escalationVal = parseZymeNumber(rowToUse[8]);
         
-        // Add to Released stats (Unique file count) ONLY if NOT in status file
-        if (!statusFileNames.has(fileName)) {
-          if (!uniqueReleasedFiles.has(fileName)) {
-            stats[region].releasedFiles++;
-            uniqueReleasedFiles.add(fileName);
-          }
-          stats[region].releasedTransactions += transVal;
-        }
+        // Metrics data takes precedence for the same fileName
+        fileDataMap.set(fileName, {
+          region,
+          transVal,
+          isApproved,
+          escalationVal
+        });
+      }
+    });
 
-        // Escalation logic: Only if NOT in status file
-        if (!statusFileNames.has(fileName)) {
-          if (region === 'APJ') totalEscalations.APJ += escalationVal;
-          else if (region === 'AMS') totalEscalations.AMS += escalationVal;
-          else if (region === 'EMEA') totalEscalations.EMEA += escalationVal;
-        }
+    // 3. Calculate stats from the consolidated map
+    fileDataMap.forEach((data, fileName) => {
+      const { region, transVal, isApproved, escalationVal } = data;
+      
+      // Received stats
+      stats[region].receivedFiles++;
+      stats[region].receivedTransactions += transVal;
+
+      // Released logic:
+      // - If it has "Approved Entries" in metrics, it's released (Request 9)
+      // - If it's NOT in the status file, it's released (Standard logic)
+      const isReleased = isApproved || !statusFileNames.has(fileName);
+
+      if (isReleased) {
+        stats[region].releasedFiles++;
+        stats[region].releasedTransactions += transVal;
+      } else {
+        // If not released, it contributes to escalations
+        totalEscalations[region as keyof typeof totalEscalations] += escalationVal;
       }
     });
 

@@ -6,6 +6,57 @@ export interface ProcessConfig {
 }
 
 /**
+ * Calculates a simple similarity score between two strings (0 to 100).
+ * Uses a basic Levenshtein-based similarity.
+ */
+const calculateSimilarity = (s1: string, s2: string): number => {
+  if (!s1 || !s2) return 0;
+  s1 = s1.toLowerCase();
+  s2 = s2.toLowerCase();
+  if (s1 === s2) return 100;
+
+  const editDistance = (a: string, b: string): number => {
+    const matrix = Array.from({ length: a.length + 1 }, () => 
+      Array.from({ length: b.length + 1 }, () => 0)
+    );
+
+    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        if (a[i - 1] === b[j - 1]) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    return matrix[a.length][b.length];
+  };
+
+  const distance = editDistance(s1, s2);
+  const maxLength = Math.max(s1.length, s2.length);
+  return Math.round(((maxLength - distance) / maxLength) * 100);
+};
+
+/**
+ * Finds unique words that match in both strings.
+ */
+const getMatchingWords = (s1: string, s2: string): string => {
+  if (!s1 || !s2) return "";
+  const words1 = new Set(s1.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+  const words2 = new Set(s2.toLowerCase().split(/\W+/).filter(w => w.length > 2));
+  
+  const matches = [...words1].filter(w => words2.has(w));
+  return matches.join(", ");
+};
+
+/**
  * Safely extracts a cell value as a trimmed string.
  */
 const getCellValue = (row: any[], index: number): string => {
@@ -183,9 +234,44 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         }
 
         // Export as modern .xlsx regardless of input format (CSV -> XLSX conversion)
-        const newWs = XLSX.utils.aoa_to_sheet(processedRows);
         const newWb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(newWb, newWs, "Processed Report");
+        const mainWs = XLSX.utils.aoa_to_sheet(processedRows);
+        XLSX.utils.book_append_sheet(newWb, mainWs, "Processed Report");
+
+        // Generate additional sheets for RPL Fuzzy Lookups
+        for (let rplIdx = 1; rplIdx <= 5; rplIdx++) {
+          const rplHeader = ["Customer Name", `RPL ${rplIdx}`, "Fuzzy Match %", "Matching Words"];
+          const dataRows: any[][] = [];
+
+          // Skip header row in processedRows
+          for (let i = 1; i < processedRows.length; i++) {
+            const row = processedRows[i];
+            const customerName = row[3]; // Column D
+            const rplValue = row[5 + rplIdx]; // RPL 1 is at index 6, RPL 2 at 7, etc.
+
+            if (customerName && rplValue) {
+              const similarity = calculateSimilarity(customerName, rplValue);
+              const matchingWords = getMatchingWords(customerName, rplValue);
+              dataRows.push([customerName, rplValue, similarity, matchingWords]);
+            }
+          }
+
+          if (dataRows.length > 0) {
+            // Sort by similarity percentage descending
+            dataRows.sort((a, b) => b[2] - a[2]);
+
+            // Format similarity as percentage string for display
+            const formattedRows = dataRows.map(row => [
+              row[0],
+              row[1],
+              `${row[2]}%`,
+              row[3]
+            ]);
+
+            const rplWs = XLSX.utils.aoa_to_sheet([rplHeader, ...formattedRows]);
+            XLSX.utils.book_append_sheet(newWb, rplWs, `RPL ${rplIdx} Lookup`);
+          }
+        }
 
         const wbout = XLSX.write(newWb, { bookType: 'xlsx', type: 'array' });
         resolve(new Uint8Array(wbout));
