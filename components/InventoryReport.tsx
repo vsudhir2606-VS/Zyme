@@ -16,6 +16,7 @@ export const InventoryReport: React.FC = () => {
   const [report, setReport] = useState<string | null>(null);
   const [regionalStats, setRegionalStats] = useState<any[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   const parseZymeNumber = (val: any): number => {
     if (val === undefined || val === null || val === '') return 0;
@@ -76,16 +77,16 @@ export const InventoryReport: React.FC = () => {
       // Include all rows including the first one
       let dataRows = rows;
 
-      // Filter metrics file by present day data in Column C (index 2)
+      // Filter metrics file by selected date data in Column C (index 2)
       if (type === 'metrics') {
-        const today = new Date();
-        const day = String(today.getDate()).padStart(2, '0');
-        const month = String(today.getMonth() + 1).padStart(2, '0');
-        const year = today.getFullYear();
+        const targetDate = new Date(selectedDate);
+        const day = String(targetDate.getDate()).padStart(2, '0');
+        const month = String(targetDate.getMonth() + 1).padStart(2, '0');
+        const year = targetDate.getFullYear();
         
-        const todayDotted = `${day}.${month}.${year}`;
-        const todaySlashed = `${day}/${month}/${year}`;
-        const todayISO = `${year}-${month}-${day}`;
+        const targetDotted = `${day}.${month}.${year}`;
+        const targetSlashed = `${day}/${month}/${year}`;
+        const targetISO = `${year}-${month}-${day}`;
         
         dataRows = dataRows.filter(row => {
           const dateVal = row[2];
@@ -95,14 +96,14 @@ export const InventoryReport: React.FC = () => {
           
           const dateStr = String(dateVal).trim();
           
-          // Must be R1 AND match today's date
+          // Must be R1 AND match target date
           const isR1 = fileName.startsWith('R1');
-          const isToday = dateStr.includes(todayDotted) || 
-                          dateStr.includes(todaySlashed) || 
-                          dateStr.includes(todayISO) ||
-                          new Date(dateStr).toDateString() === today.toDateString();
+          const isTargetDate = dateStr.includes(targetDotted) || 
+                               dateStr.includes(targetSlashed) || 
+                               dateStr.includes(targetISO) ||
+                               new Date(dateStr).toDateString() === targetDate.toDateString();
           
-          return isR1 && isToday;
+          return isR1 && isTargetDate;
         });
       } else if (type === 'status') {
         // Only consider file names (Column A) starting with R1
@@ -211,6 +212,9 @@ export const InventoryReport: React.FC = () => {
     });
 
     metricsGroups.forEach((rows, fileName) => {
+      // If file exists in both, don't consider metrics file (Request 11)
+      if (fileDataMap.has(fileName)) return;
+
       // Find if any row has "Approved Entries"
       const approvedRow = rows.find(row => 
         row.some(cell => String(cell || '').toLowerCase().includes('approved entries'))
@@ -229,7 +233,6 @@ export const InventoryReport: React.FC = () => {
         const transVal = parseZymeNumber(rowToUse[6]);
         const escalationVal = parseZymeNumber(rowToUse[8]);
         
-        // Metrics data takes precedence for the same fileName
         fileDataMap.set(fileName, {
           region,
           transVal,
@@ -281,8 +284,8 @@ export const InventoryReport: React.FC = () => {
 
     setRegionalStats([...finalStats, totalRow]);
 
-    const today = new Date();
-    const formattedDate = today.toLocaleDateString('en-GB', {
+    const reportDateObj = new Date(selectedDate);
+    const formattedDate = reportDateObj.toLocaleDateString('en-GB', {
       day: 'numeric',
       month: 'long',
       year: 'numeric'
@@ -382,6 +385,22 @@ Status of Received R1 File – ${formattedDate}`;
     <div className="flex-1 overflow-y-auto p-8 relative z-10">
       <div className="max-w-4xl mx-auto space-y-8">
         
+        {/* Date Selection */}
+        <div className="bg-white/50 backdrop-blur-sm p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+          <div>
+            <h3 className="text-sm font-bold text-slate-800">Report Date</h3>
+            <p className="text-xs text-slate-500 mt-1">Select the date for which to pull data</p>
+          </div>
+          <div className="relative">
+            <input 
+              type="date" 
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all shadow-sm"
+            />
+          </div>
+        </div>
+
         {/* Upload Section */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Metrics File Upload */}
