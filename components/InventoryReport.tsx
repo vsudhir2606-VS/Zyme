@@ -231,7 +231,8 @@ export const InventoryReport: React.FC = () => {
 
       if (region) {
         const transVal = parseZymeNumber(rowToUse[6]);
-        const escalationVal = parseZymeNumber(rowToUse[8]);
+        // Only consider escalation if not repeated in metrics (Request 12)
+        const escalationVal = rows.length === 1 ? parseZymeNumber(rowToUse[8]) : 0;
         
         fileDataMap.set(fileName, {
           region,
@@ -258,10 +259,12 @@ export const InventoryReport: React.FC = () => {
       if (isReleased) {
         stats[region].releasedFiles++;
         stats[region].releasedTransactions += transVal;
-      } else {
-        // If not released, it contributes to escalations
-        totalEscalations[region as keyof typeof totalEscalations] += escalationVal;
       }
+      
+      // Add escalation value (Request 12)
+      // This will be Column I for metrics-only files (if not repeated), 
+      // and 0 for status files or repeated metrics files.
+      totalEscalations[region as keyof typeof totalEscalations] += escalationVal;
     });
 
     // Calculate Pending and Totals
