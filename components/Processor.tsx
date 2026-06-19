@@ -1,13 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, Download, FileText, Loader2, RefreshCw, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, Table } from 'lucide-react';
 import { processExcelFile } from '../utils/excelProcessor.ts';
 
 interface ProcessorProps {
   highRiskKeywords: string[];
   aprvCodes: string[];
+  referenceData: Record<string, string[]> | null;
+  referenceFileName: string | null;
 }
 
-export const Processor: React.FC<ProcessorProps> = ({ highRiskKeywords, aprvCodes }) => {
+export const Processor: React.FC<ProcessorProps> = ({ 
+  highRiskKeywords, 
+  aprvCodes, 
+  referenceData, 
+  referenceFileName 
+}) => {
   const [file, setFile] = useState<File | null>(null);
   const [processing, setProcessing] = useState(false);
   const [processedData, setProcessedData] = useState<Uint8Array | null>(null);
@@ -32,7 +39,8 @@ export const Processor: React.FC<ProcessorProps> = ({ highRiskKeywords, aprvCode
       await new Promise(resolve => setTimeout(resolve, 1200)); // Smooth animation delay
       const result = await processExcelFile(file, {
         highRiskKeywords,
-        aprvCodes
+        aprvCodes,
+        referenceData: referenceData || undefined
       });
       setProcessedData(result);
     } catch (err: any) {
@@ -152,7 +160,38 @@ export const Processor: React.FC<ProcessorProps> = ({ highRiskKeywords, aprvCode
                 </div>
               )}
 
-              <div className="mt-8">
+              {/* Reference Data Sheet Status Card */}
+              <div className="mt-6 p-3 rounded-2xl border border-slate-100 bg-slate-50/50 flex items-center justify-between gap-4 transition-all w-full">
+                <div className="flex items-center gap-2">
+                  <Table size={14} className="text-slate-400" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Data Match State</span>
+                </div>
+                
+                {/* Visual indicator containing dual status dots */}
+                <div className="inline-flex items-center bg-white border border-slate-200 rounded-xl p-1 gap-1 shadow-sm">
+                  {/* Ready Dot */}
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all duration-300 ${
+                    referenceData 
+                      ? 'bg-emerald-50 text-emerald-700 font-black border border-emerald-100' 
+                      : 'text-slate-300 opacity-50'
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full transition-all ${referenceData ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50 animate-pulse' : 'bg-slate-300'}`} />
+                    <span className="text-[10px] tracking-wider font-extrabold">READY</span>
+                  </div>
+
+                  {/* Not Ready Dot */}
+                  <div className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold rounded-lg transition-all duration-300 ${
+                    !referenceData 
+                      ? 'bg-red-50 text-red-600 font-black border border-red-100' 
+                      : 'text-slate-300 opacity-50'
+                  }`}>
+                    <div className={`w-2 h-2 rounded-full transition-all ${!referenceData ? 'bg-red-500 shadow-sm shadow-red-500/50' : 'bg-slate-300'}`} />
+                    <span className="text-[10px] tracking-wider font-extrabold">NOT READY</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-6">
                 <button 
                   onClick={handleProcess}
                   disabled={!file || processing}

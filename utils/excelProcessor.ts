@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 export interface ProcessConfig {
   highRiskKeywords: string[];
   aprvCodes: string[];
+  referenceData?: Record<string, string[]>;
 }
 
 /**
@@ -54,6 +55,15 @@ const getMatchingWords = (s1: string, s2: string): string => {
   
   const matches = [...words1].filter(w => words2.has(w));
   return matches.join(", ");
+};
+
+const normalizeKey = (val: string): string => {
+  return (val || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\u00a0\s]+/g, " ") // Standardize multiple/non-breaking spaces
+    .replace(/[^\w\s]/gi, "")    // Strip punctuation or non-alphanumeric chars
+    .trim();
 };
 
 /**
@@ -149,6 +159,71 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           "Splid 5",          // U: Extracted Splid 5
         ];
 
+        // Pre-analyze unique reference matching columns to specify header size dynamically
+        const rowDataSheetValues: string[][] = [];
+        let maxUniqueValuesCount = 1;
+
+        // Build a robust normalized lookup cache to guarantee 100% accurate matches for punctuation, spacing variations
+        const normalizedRefCache: Record<string, string[]> = {};
+        if (config.referenceData) {
+          const refKeys = Object.keys(config.referenceData);
+          for (let k = 0; k < refKeys.length; k++) {
+            const originalKey = refKeys[k];
+            const originalVals = config.referenceData[originalKey] || [];
+            
+            // Map the exact lowercase key
+            normalizedRefCache[originalKey.toLowerCase().trim()] = originalVals;
+            
+            // Also map the normalized key
+            const normKey = normalizeKey(originalKey);
+            if (normKey) {
+              if (!normalizedRefCache[normKey]) {
+                normalizedRefCache[normKey] = originalVals;
+              }
+            }
+          }
+        }
+
+        for (let i = 0; i < jsonData.length; i++) {
+          const rawRow = jsonData[i];
+          if (!rawRow || rawRow.length === 0) {
+            rowDataSheetValues.push([]);
+            continue;
+          }
+          let matched: string[] = [];
+          if (config.referenceData) {
+            const rawI = getCellValue(rawRow, 8); // Column I of raw file (Customer Name)
+            const rawJ = getCellValue(rawRow, 9); // Column J of raw file
+            
+            const keyI_exact = rawI.toLowerCase().trim();
+            const keyI_norm = normalizeKey(rawI);
+            
+            const keyJ_exact = rawJ.toLowerCase().trim();
+            const keyJ_norm = normalizeKey(rawJ);
+            
+            // Try lookups in order of priority:
+            // 1. Exact Column I (Standard Customer column)
+            // 2. Normalized Column I
+            // 3. Exact Column J (Alternative Customer column)
+            // 4. Normalized Column J
+            matched = (keyI_exact && normalizedRefCache[keyI_exact]) || 
+                      (keyI_norm && normalizedRefCache[keyI_norm]) || 
+                      (keyJ_exact && normalizedRefCache[keyJ_exact]) || 
+                      (keyJ_norm && normalizedRefCache[keyJ_norm]) || 
+                      [];
+          }
+          rowDataSheetValues.push(matched);
+          if (matched.length > maxUniqueValuesCount) {
+            maxUniqueValuesCount = matched.length;
+          }
+        }
+
+        // Append Column V and beyond to Header (index 21 onwards)
+        newHeader.push("Unique Match AF Values 1");
+        for (let idx = 2; idx <= maxUniqueValuesCount; idx++) {
+          newHeader.push(`Unique Match AF Values ${idx}`);
+        }
+
         const processedRows: any[][] = [newHeader];
 
         // Process every row starting from index 0
@@ -229,6 +304,16 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
             splids[3] || "",       // T
             splids[4] || "",       // U
           ];
+
+          // Append values of Column AF mapping starting from V (index 21)
+          const matchedValsForThisRow = rowDataSheetValues[i] || [];
+          for (let valIdx = 0; valIdx < maxUniqueValuesCount; valIdx++) {
+            if (matchedValsForThisRow.length === 0) {
+              newRow.push(valIdx === 0 ? "N/A" : "");
+            } else {
+              newRow.push(matchedValsForThisRow[valIdx] || "");
+            }
+          }
 
           processedRows.push(newRow);
         }

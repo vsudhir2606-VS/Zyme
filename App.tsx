@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity } from 'lucide-react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
+import { DataSheet } from './components/DataSheet.tsx';
+import { getReferenceData, saveReferenceData, clearReferenceData } from './utils/db.ts';
 
 import { InventoryReport } from './components/InventoryReport.tsx';
 
@@ -15,10 +17,30 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'consolidator' | 'inventory';
+type AppTab = 'processor' | 'consolidator' | 'inventory' | 'datasheet';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
+  const [referenceData, setReferenceData] = useState<Record<string, string[]> | null>(null);
+  const [referenceFileName, setReferenceFileName] = useState<string | null>(null);
+  const [isDbLoading, setIsDbLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadSavedData() {
+      try {
+        const saved = await getReferenceData();
+        if (saved && saved.data) {
+          setReferenceData(saved.data);
+          setReferenceFileName(saved.fileName);
+        }
+      } catch (err) {
+        console.error("Failed to load saved reference data from IndexedDB:", err);
+      } finally {
+        setIsDbLoading(false);
+      }
+    }
+    loadSavedData();
+  }, []);
   
   // UI State for collapsibles
   const [isRiskExpanded, setIsRiskExpanded] = useState(false);
@@ -105,6 +127,13 @@ export default function App() {
             >
               <FileText size={18} />
               <span className="text-sm font-semibold">Inventory Report</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('datasheet')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'datasheet' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
+            >
+              <Table size={18} />
+              <span className="text-sm font-semibold">Data Sheet</span>
             </button>
           </div>
 
@@ -228,14 +257,22 @@ export default function App() {
         <header className="relative z-10 px-8 py-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-white/20">
           <div>
             <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
-              {activeTab === 'processor' ? 'Data Processing' : activeTab === 'consolidator' ? 'Data Consolidation' : 'Inventory Reporting'}
+              {activeTab === 'processor' 
+                ? 'Data Processing' 
+                : activeTab === 'consolidator' 
+                ? 'Data Consolidation' 
+                : activeTab === 'inventory' 
+                ? 'Inventory Reporting' 
+                : 'Data Sheet'}
             </h2>
             <p className="text-slate-500 text-sm font-medium">
               {activeTab === 'processor' 
                 ? 'Manage and transform your compliance datasets' 
                 : activeTab === 'consolidator'
                 ? 'Merge multiple reports into a master dataset'
-                : 'Generate daily inventory status comments from Excel files'}
+                : activeTab === 'inventory'
+                ? 'Generate daily inventory status comments from Excel files'
+                : 'Upload global customer mappings to enrich your compliance sheet Column V'}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -251,11 +288,38 @@ export default function App() {
 
         {/* Center Content */}
         {activeTab === 'processor' ? (
-          <Processor highRiskKeywords={highRiskKeywords} aprvCodes={aprvCodes} />
+          <Processor 
+            highRiskKeywords={highRiskKeywords} 
+            aprvCodes={aprvCodes} 
+            referenceData={referenceData}
+            referenceFileName={referenceFileName}
+          />
         ) : activeTab === 'consolidator' ? (
           <Consolidator />
-        ) : (
+        ) : activeTab === 'inventory' ? (
           <InventoryReport />
+        ) : (
+          <DataSheet 
+            onDataLoaded={async (data, name) => {
+              setReferenceData(data);
+              setReferenceFileName(name);
+              if (data && name) {
+                try {
+                  await saveReferenceData(data, name);
+                } catch (err) {
+                  console.error("Failed to save background reference data in IndexedDB:", err);
+                }
+              } else {
+                try {
+                  await clearReferenceData();
+                } catch (err) {
+                  console.error("Failed to clear background reference data from IndexedDB:", err);
+                }
+              }
+            }}
+            referenceData={referenceData}
+            referenceFileName={referenceFileName}
+          />
         )}
       </main>
     </div>
