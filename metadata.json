@@ -1,5 +1,6 @@
 {
   "name": "ZymeProcessor",
   "description": "Transforms raw Excel data into structured compliance reports with automated risk detection, match extraction, and status mapping.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

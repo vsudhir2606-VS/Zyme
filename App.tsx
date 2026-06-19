@@ -32,9 +32,24 @@ export default function App() {
         if (saved && saved.data) {
           setReferenceData(saved.data);
           setReferenceFileName(saved.fileName);
+          setIsDbLoading(false);
+          return;
+        }
+
+        // Fallback to pre-packaged/pre-saved data sheet from codebase server
+        const response = await fetch('/api/get-datasheet');
+        if (response.ok) {
+          const preloaded = await response.json();
+          if (preloaded && preloaded.referenceData) {
+            setReferenceData(preloaded.referenceData);
+            setReferenceFileName(preloaded.referenceFileName);
+            
+            // Sync it to Local IndexedDB so it remains available
+            await saveReferenceData(preloaded.referenceData, preloaded.referenceFileName);
+          }
         }
       } catch (err) {
-        console.error("Failed to load saved reference data from IndexedDB:", err);
+        console.error("Failed to load saved reference data from IndexedDB or API:", err);
       } finally {
         setIsDbLoading(false);
       }
@@ -305,15 +320,31 @@ export default function App() {
               setReferenceFileName(name);
               if (data && name) {
                 try {
+                  // Save to IndexedDB (local browser cache)
                   await saveReferenceData(data, name);
+
+                  // Commit to server-side filesystem (perm-preset)
+                  await fetch('/api/save-datasheet', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ referenceData: data, referenceFileName: name })
+                  });
                 } catch (err) {
-                  console.error("Failed to save background reference data in IndexedDB:", err);
+                  console.error("Failed to save background reference data in IndexedDB/API:", err);
                 }
               } else {
                 try {
+                  // Clear IndexedDB
                   await clearReferenceData();
+
+                  // Clear server-side preset
+                  await fetch('/api/save-datasheet', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ referenceData: null, referenceFileName: null })
+                  });
                 } catch (err) {
-                  console.error("Failed to clear background reference data from IndexedDB:", err);
+                  console.error("Failed to clear background reference data from IndexedDB/API:", err);
                 }
               }
             }}
