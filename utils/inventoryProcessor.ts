@@ -124,29 +124,8 @@ export const processInventoryFiles = async (metricsFile: File, statusFile: File)
   // If status file has similar structure or different, we can process it too
   // For escalations, we might look for 'Escalation' or 'Gina/Kiran/Shawn'
   
+  // Let escalation values remain 0 as they will be updated manually by the user
   let escalations = { apj: 0, ams: 0, emea: 0 };
-  
-  const findEscalations = (data: any[][]) => {
-    const headers = data[0] || [];
-    const rows = data.slice(1);
-    
-    const regionCol = headers.findIndex(h => String(h).toLowerCase().includes('region'));
-    const escalationCol = headers.findIndex(h => 
-      ['escalation', 'gina', 'kiran', 'shawn'].some(k => String(h).toLowerCase().includes(k))
-    );
-
-    if (regionCol !== -1 && escalationCol !== -1) {
-      rows.forEach(row => {
-        const region = String(row[regionCol] || '').toUpperCase();
-        const val = Number(row[escalationCol]) || 0;
-        if (region.includes('APJ')) escalations.apj += val;
-        if (region.includes('AMS')) escalations.ams += val;
-        if (region.includes('EMEA')) escalations.emea += val;
-      });
-    }
-  };
-
-  findEscalations(statusData);
 
   const totalReceivedFiles = table.reduce((sum, t) => sum + t.receivedFiles, 0);
   const totalReceivedTrans = table.reduce((sum, t) => sum + t.receivedTransactions, 0);

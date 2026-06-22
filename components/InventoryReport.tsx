@@ -261,10 +261,8 @@ export const InventoryReport: React.FC = () => {
         stats[region].releasedTransactions += transVal;
       }
       
-      // Add escalation value (Request 12)
-      // This will be Column I for metrics-only files (if not repeated), 
-      // and 0 for status files or repeated metrics files.
-      totalEscalations[region as keyof typeof totalEscalations] += escalationVal;
+      // Keep escalation count at 0 for manual updates as requested
+      totalEscalations[region as keyof typeof totalEscalations] += 0;
     });
 
     // Calculate Pending and Totals
