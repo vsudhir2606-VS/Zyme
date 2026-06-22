@@ -124,8 +124,75 @@ export const processInventoryFiles = async (metricsFile: File, statusFile: File)
   // If status file has similar structure or different, we can process it too
   // For escalations, we might look for 'Escalation' or 'Gina/Kiran/Shawn'
   
-  // Let escalation values remain 0 as they will be updated manually by the user
+  // Let escalation values match the RX suffix rules of status reports
   let escalations = { apj: 0, ams: 0, emea: 0 };
+
+  const metricsR1Suffixes = new Set<string>();
+  metricsData.forEach(row => {
+    if (row && Array.isArray(row)) {
+      row.forEach(cell => {
+        const cellStr = String(cell || '').trim().toUpperCase();
+        if (cellStr.startsWith('R1') && cellStr.includes('.TMP')) {
+          const suffix = cellStr.replace(/^R\d+/, '');
+          metricsR1Suffixes.add(suffix);
+        }
+      });
+    }
+  });
+
+  // Dynamically find "unique ent" column index
+  let statusUniqueEntCol = -1;
+  const statusHeaderRows = statusData.slice(0, 10);
+  for (const row of statusHeaderRows) {
+    const idx = row.findIndex(cell => {
+      const val = String(cell || '').toLowerCase().trim();
+      return val.includes('unique ent') || val.includes('unique_ent') || (val.includes('unique') && val.includes('ent'));
+    });
+    if (idx !== -1) {
+      statusUniqueEntCol = idx;
+      break;
+    }
+  }
+  if (statusUniqueEntCol === -1) {
+    for (const row of statusHeaderRows) {
+      const idx = row.findIndex(cell => {
+        const val = String(cell || '').toLowerCase().trim();
+        return val.includes('unique');
+      });
+      if (idx !== -1) {
+        statusUniqueEntCol = idx;
+        break;
+      }
+    }
+  }
+  if (statusUniqueEntCol === -1) {
+    statusUniqueEntCol = 2; // Default fallback to Column C (index 2)
+  }
+
+  statusData.forEach(row => {
+    if (!row || row.length === 0) return;
+    const fileName = String(row[0] || '').trim().toUpperCase();
+    if (fileName && /^R\d+/.test(fileName) && !fileName.startsWith('R1')) {
+      const suffix = fileName.replace(/^R\d+/, '');
+      if (metricsR1Suffixes.has(suffix)) {
+        let region = '';
+        if (fileName.includes('_APJ_') || fileName.includes('APJ')) region = 'apj';
+        else if (fileName.includes('_AMS_') || fileName.includes('AMS') || fileName.includes('AMER')) region = 'ams';
+        else if (fileName.includes('_EMEA_') || fileName.includes('EMEA')) region = 'emea';
+
+        if (region) {
+          const rawVal = row[statusUniqueEntCol];
+          let val = 0;
+          if (typeof rawVal === 'number') {
+            val = rawVal;
+          } else if (rawVal) {
+            val = parseFloat(String(rawVal).replace(/,/g, '')) || 0;
+          }
+          escalations[region as keyof typeof escalations] += val;
+        }
+      }
+    }
+  });
 
   const totalReceivedFiles = table.reduce((sum, t) => sum + t.receivedFiles, 0);
   const totalReceivedTrans = table.reduce((sum, t) => sum + t.receivedTransactions, 0);

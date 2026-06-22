@@ -106,20 +106,25 @@ export const InventoryReport: React.FC = () => {
           return isR1 && isTargetDate;
         });
       } else if (type === 'status') {
-        // Only consider file names (Column A) starting with R1
+        // Keep files starting with R followed by a digit (e.g. R1, R2, R3, R4) to capture escalations
         dataRows = dataRows.filter(row => {
           const fileName = String(row[0] || '').trim().toUpperCase();
-          return fileName.startsWith('R1');
+          return /^R\d+/.test(fileName);
         });
       }
       
+      // For status metrics, only count and sum files starting with R1
+      const statusR1Rows = type === 'status' 
+        ? dataRows.filter(row => String(row[0] || '').trim().toUpperCase().startsWith('R1'))
+        : dataRows;
+
       // Files: count of rows in Column A (index 0) for status, Column B (index 1) for metrics
       const fileColIndex = type === 'metrics' ? 1 : 0;
-      const fileCount = dataRows.filter(row => row[fileColIndex] !== undefined && row[fileColIndex] !== null && String(row[fileColIndex]).trim() !== '').length;
+      const fileCount = statusR1Rows.filter(row => row[fileColIndex] !== undefined && row[fileColIndex] !== null && String(row[fileColIndex]).trim() !== '').length;
       
       // Transactions: sum of values in Column G (index 6) for metrics, Column C (index 2) for status
       const transColIndex = type === 'metrics' ? 6 : 2;
-      const transactionSum = dataRows.reduce((sum, row) => {
+      const transactionSum = statusR1Rows.reduce((sum, row) => {
         return sum + parseZymeNumber(row[transColIndex]);
       }, 0);
 
@@ -168,8 +173,39 @@ export const InventoryReport: React.FC = () => {
     const statusFileNames = new Set<string>();
     statusFile.rows.forEach(row => {
       const fileName = String(row[0] || '').trim().toUpperCase();
-      if (fileName) statusFileNames.add(fileName);
+      if (fileName && fileName.startsWith('R1')) {
+        statusFileNames.add(fileName);
+      }
     });
+
+    // Locate "unique ent" column dynamically
+    let uniqueEntColIndex = -1;
+    const possibleHeaderRows = statusFile.rows.slice(0, 10);
+    for (const row of possibleHeaderRows) {
+      const idx = row.findIndex(cell => {
+        const val = String(cell || '').toLowerCase().trim();
+        return val.includes('unique ent') || val.includes('unique_ent') || (val.includes('unique') && val.includes('ent'));
+      });
+      if (idx !== -1) {
+        uniqueEntColIndex = idx;
+        break;
+      }
+    }
+    if (uniqueEntColIndex === -1) {
+      for (const row of possibleHeaderRows) {
+        const idx = row.findIndex(cell => {
+          const val = String(cell || '').toLowerCase().trim();
+          return val.includes('unique');
+        });
+        if (idx !== -1) {
+          uniqueEntColIndex = idx;
+          break;
+        }
+      }
+    }
+    if (uniqueEntColIndex === -1) {
+      uniqueEntColIndex = 2; // default fallback index (Column C)
+    }
 
     // Use a Map to track unique files and their best data
     // This avoids double counting when files exist in both metrics and status
@@ -183,7 +219,7 @@ export const InventoryReport: React.FC = () => {
     // 1. Process Status File first (as baseline for pending files)
     statusFile.rows.forEach(row => {
       const fileName = String(row[0] || '').trim().toUpperCase();
-      if (!fileName) return;
+      if (!fileName || !fileName.startsWith('R1')) return; // standard baseline is only R1
 
       let region = '';
       if (fileName.includes('_APJ_') || fileName.includes('APJ')) region = 'APJ';
@@ -243,6 +279,34 @@ export const InventoryReport: React.FC = () => {
       }
     });
 
+    // Map metrics R1 fileName suffixes to original files
+    const metricsR1Suffixes = new Set<string>();
+    metricsGroups.forEach((rows, fileName) => {
+      if (fileName.startsWith('R1')) {
+        const suffix = fileName.replace(/^R\d+/, '');
+        metricsR1Suffixes.add(suffix);
+      }
+    });
+
+    // Populate totalEscalations from statusFile rows using R2, R3, R4, etc. matched suffixes
+    statusFile.rows.forEach(row => {
+      const fileName = String(row[0] || '').trim().toUpperCase();
+      if (fileName && /^R\d+/.test(fileName) && !fileName.startsWith('R1')) {
+        const suffix = fileName.replace(/^R\d+/, '');
+        if (metricsR1Suffixes.has(suffix)) {
+          let region = '';
+          if (fileName.includes('_APJ_') || fileName.includes('APJ')) region = 'APJ';
+          else if (fileName.includes('_AMS_') || fileName.includes('AMS') || fileName.includes('AMER')) region = 'AMS';
+          else if (fileName.includes('_EMEA_') || fileName.includes('EMEA')) region = 'EMEA';
+
+          if (region) {
+            const val = parseZymeNumber(row[uniqueEntColIndex]);
+            totalEscalations[region as keyof typeof totalEscalations] += val;
+          }
+        }
+      }
+    });
+
     // 3. Calculate stats from the consolidated map
     fileDataMap.forEach((data, fileName) => {
       const { region, transVal, isApproved, escalationVal } = data;
@@ -260,9 +324,6 @@ export const InventoryReport: React.FC = () => {
         stats[region].releasedFiles++;
         stats[region].releasedTransactions += transVal;
       }
-      
-      // Keep escalation count at 0 for manual updates as requested
-      totalEscalations[region as keyof typeof totalEscalations] += 0;
     });
 
     // Calculate Pending and Totals

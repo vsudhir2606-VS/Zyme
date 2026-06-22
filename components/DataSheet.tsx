@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, ShieldAlert, Trash2, Search, Table, RefreshCw, Download } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Upload, FileSpreadsheet, CheckCircle2, ShieldAlert, Trash2, Search, Table, RefreshCw, Download, Settings } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 export const normalizeKey = (val: string): string => {
@@ -21,8 +21,22 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const appendFileInputRef = useRef<HTMLInputElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(event.target as Node)) {
+        setShowSettings(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -390,49 +404,86 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
             <div className="flex flex-col h-[520px]">
               
               {/* Header section with status */}
-              <div className="p-6 border-b border-slate-100 bg-white/40 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div className="p-6 border-b border-slate-100 bg-white/40 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-100/50">
-                    <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+                  <div className="p-2.5 bg-indigo-50/60 rounded-xl border border-indigo-100/50">
+                    <Table className="w-5 h-5 text-indigo-600 animate-pulse" />
                   </div>
                   <div>
-                    <h4 className="text-base font-bold text-slate-800">Mappings Loaded</h4>
-                    <p className="text-xs text-slate-500 font-mono flex items-center gap-1.5 mt-0.5 max-w-[280px] sm:max-w-none truncate">
-                      <span className="text-slate-400">File:</span> {referenceFileName}
-                    </p>
+                    <h4 className="text-base font-bold text-slate-800">Enrichment Mapping Index</h4>
+                    <p className="text-xs text-slate-400 mt-0.5">Automated match lookup table active</p>
                   </div>
                 </div>
                 
-                <div className="flex flex-wrap items-center gap-2.5 self-end sm:self-center">
-                  <div className="px-3 py-1.5 bg-indigo-50/60 border border-indigo-100/50 rounded-lg text-right">
+                <div className="flex items-center gap-3 relative" ref={settingsRef}>
+                  <div className="px-3 py-1.5 bg-indigo-50/60 border border-indigo-100/50 rounded-xl text-right">
                     <span className="block text-[9px] text-slate-400 font-bold uppercase tracking-wider leading-none">MAPPED CLIENTS</span>
                     <span className="text-sm font-black text-indigo-600 leading-none mt-1 block">{totalMappedClients}</span>
                   </div>
 
-                  <button
-                    onClick={() => appendFileInputRef.current?.click()}
-                    disabled={loading}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-xl text-indigo-600 text-xs font-semibold transition-all shadow-sm"
-                  >
-                    <Upload size={14} className={loading ? "animate-spin" : ""} />
-                    <span>{loading ? "Adding..." : "Add/Append File"}</span>
-                  </button>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowSettings(!showSettings)}
+                      className="p-2 bg-white text-slate-500 hover:text-indigo-600 hover:bg-slate-50 border border-slate-200/80 rounded-xl transition-all shadow-sm flex items-center justify-center cursor-pointer"
+                      title="Data Sheet Settings"
+                    >
+                      <Settings size={18} className={`transition-transform duration-300 ${showSettings ? "rotate-45 text-indigo-600" : ""}`} />
+                    </button>
 
-                  <button
-                    onClick={handleDownload}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-100 rounded-xl text-emerald-600 text-xs font-semibold transition-all shadow-sm"
-                  >
-                    <Download size={14} />
-                    <span>Download Data Sheet</span>
-                  </button>
-                  
-                  <button
-                    onClick={handleClear}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded-xl text-rose-600 text-xs font-semibold transition-all shadow-sm"
-                  >
-                    <Trash2 size={14} />
-                    <span>Clear Data</span>
-                  </button>
+                    {showSettings && (
+                      <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl border border-slate-100 shadow-xl z-50 p-4 animate-in fade-in slide-in-from-top-2 duration-150">
+                        {/* Status detail inside settings popup */}
+                        <div className="pb-3 border-b border-slate-100 mb-2">
+                          <p className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest">Database State</p>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <CheckCircle2 size={16} className="text-emerald-500 animate-bounce" />
+                            <span className="text-xs font-bold text-slate-700">Mappings Loaded</span>
+                          </div>
+                          {referenceFileName && (
+                            <p className="text-[10px] text-slate-400 font-mono mt-1 break-all bg-slate-50 p-1.5 rounded-lg border border-slate-100/60" title={referenceFileName}>
+                              {referenceFileName}
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Interactive operations */}
+                        <div className="space-y-1">
+                          <button
+                            onClick={() => {
+                              appendFileInputRef.current?.click();
+                              setShowSettings(false);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-indigo-50 text-indigo-600 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer"
+                          >
+                            <Upload size={14} className={loading ? "animate-spin" : ""} />
+                            <span>Add/Append File</span>
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              handleDownload();
+                              setShowSettings(false);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-emerald-50 text-emerald-600 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer"
+                          >
+                            <Download size={14} />
+                            <span>Download Data Sheet</span>
+                          </button>
+                          
+                          <button
+                            onClick={() => {
+                              handleClear();
+                              setShowSettings(false);
+                            }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-rose-50 text-rose-600 rounded-xl text-xs font-semibold transition-all text-left border-t border-slate-100 pt-2 mt-2 cursor-pointer"
+                          >
+                            <Trash2 size={14} />
+                            <span>Clear Data</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
