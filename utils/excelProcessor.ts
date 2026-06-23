@@ -169,8 +169,10 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           const refKeys = Object.keys(config.referenceData);
           for (let k = 0; k < refKeys.length; k++) {
             const originalKey = refKeys[k];
-            // Ensure values are copied and sorted descending by length (longest/most-words comment first)
-            const originalVals = [...(config.referenceData[originalKey] || [])].sort((a, b) => b.length - a.length);
+            // Ensure values are copied, clamped to 32750 chars, and sorted descending by length (longest/most-words comment first)
+            const originalVals = [...(config.referenceData[originalKey] || [])]
+              .map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
+              .sort((a, b) => b.length - a.length);
             
             // Map the exact lowercase key
             normalizedRefCache[originalKey.toLowerCase().trim()] = originalVals;
@@ -322,7 +324,10 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
         // Export as modern .xlsx regardless of input format (CSV -> XLSX conversion)
         const newWb = XLSX.utils.book_new();
-        const mainWs = XLSX.utils.aoa_to_sheet(processedRows);
+        const clampedProcessedRows = processedRows.map(row => 
+          row.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
+        );
+        const mainWs = XLSX.utils.aoa_to_sheet(clampedProcessedRows);
         XLSX.utils.book_append_sheet(newWb, mainWs, "Processed Report");
 
         // Generate additional sheets for RPL Fuzzy Lookups
@@ -347,13 +352,15 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
             // Sort by similarity percentage descending
             dataRows.sort((a, b) => b[2] - a[2]);
 
-            // Format similarity as percentage string for display
+            // Format similarity as percentage string for display and clamp to 32750 chars
             const formattedRows = dataRows.map(row => [
               row[0],
               row[1],
               `${row[2]}%`,
               row[3]
-            ]);
+            ]).map(row => 
+              row.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
+            );
 
             const rplWs = XLSX.utils.aoa_to_sheet([rplHeader, ...formattedRows]);
             XLSX.utils.book_append_sheet(newWb, rplWs, `RPL ${rplIdx} Lookup`);

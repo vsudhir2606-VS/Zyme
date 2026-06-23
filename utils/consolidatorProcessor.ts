@@ -51,10 +51,12 @@ export const consolidateFiles = async (files: File[]): Promise<ConsolidationResu
 
     if (jsonData.length === 0) continue;
 
+    const clampRow = (r: any[]) => r.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val);
+
     // --- Process Sheet 1 (Full Consolidation) ---
     // Requirement: headers not required for Sheet 1
     // Include all rows including the first one
-    jsonData.forEach(row => sheet1.addRow(row));
+    jsonData.forEach(row => sheet1.addRow(clampRow(row)));
 
     // --- Process Sheet 2 (Specific Mapping) ---
     // Include all rows including the first one
@@ -88,7 +90,7 @@ export const consolidateFiles = async (files: File[]): Promise<ConsolidationResu
         ""               // Comments (Blank)
       ];
       
-      sheet2.addRow(mappedRow);
+      sheet2.addRow(clampRow(mappedRow));
       totalRowCount++;
     }
   }

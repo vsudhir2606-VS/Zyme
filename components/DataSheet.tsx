@@ -130,14 +130,12 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
 
         // Using Set for duplicate identification rather than linear array search, O(1) matching!
         const processedSetMap: Record<string, Set<string>> = {};
-        const originalCaseMap: Record<string, string> = {};
 
         // If appending, populate from current reference data
         if (isAppend && referenceData) {
           Object.entries(referenceData).forEach(([customer, values]) => {
             const key = customer.toLowerCase().trim();
             processedSetMap[key] = new Set(values as string[]);
-            originalCaseMap[key] = customer;
           });
         }
 
@@ -152,15 +150,17 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
 
           if (customerRaw !== undefined && customerRaw !== null && afRaw !== undefined && afRaw !== null) {
             const customerStr = String(customerRaw).trim();
-            const afStr = String(afRaw).trim();
+            let afStr = String(afRaw).trim();
+            if (afStr.length > 32750) {
+              afStr = afStr.slice(0, 32750) + "... [truncated]";
+            }
 
             if (customerStr && afStr && customerStr.toLowerCase() !== "customer name") {
-              const key = customerStr.toLowerCase().trim();
+              const key = customerStr.toLowerCase();
               let sSet = processedSetMap[key];
               if (!sSet) {
                 sSet = new Set<string>();
                 processedSetMap[key] = sSet;
-                originalCaseMap[key] = customerStr;
               }
               sSet.add(afStr);
             }
@@ -170,12 +170,10 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         const processedMap: Record<string, string[]> = {};
         const clientKeys = Object.keys(processedSetMap);
         for (let i = 0; i < clientKeys.length; i++) {
-          const lKey = clientKeys[i];
-          const origName = originalCaseMap[lKey] || lKey;
-          const valsArray = Array.from(processedSetMap[lKey]);
+          const valsArray = Array.from(processedSetMap[clientKeys[i]]);
           // Sort descending by characters length so longest comments appear first
           valsArray.sort((a, b) => b.length - a.length);
-          processedMap[origName] = valsArray;
+          processedMap[clientKeys[i]] = valsArray;
         }
 
         if (clientKeys.length === 0) {
@@ -251,13 +249,15 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
 
       // Data rows: loop through every client and write all associated values
       Object.entries(referenceData).forEach(([clientName, afValues]) => {
+        const safeClientName = clientName.length > 32750 ? clientName.slice(0, 32750) + "... [truncated]" : clientName;
         (afValues as string[]).forEach((afVal) => {
           const dataRow: any[] = [];
+          const safeAfVal = afVal.length > 32750 ? afVal.slice(0, 32750) + "... [truncated]" : afVal;
           for (let c = 0; c < 32; c++) {
             if (c === 8) {
-              dataRow.push(clientName);
+              dataRow.push(safeClientName);
             } else if (c === 31) {
-              dataRow.push(afVal);
+              dataRow.push(safeAfVal);
             } else {
               dataRow.push("");
             }
@@ -271,24 +271,24 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Active Reference Mappings");
 
+      // Write array buffer
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+      const blob = new Blob([wbout], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      
       // Download name formatting
       let name = referenceFileName ? referenceFileName.replace(/ \+ /g, "_and_") : "active_data_sheet";
       if (!name.endsWith(".xlsx") && !name.endsWith(".xls") && !name.endsWith(".xlsm")) {
         name += ".xlsx";
       }
-
-      // Generate array buffer
-      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-      const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
       a.download = name;
       
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error(err);
       setError("Failed to export active reference data.");
