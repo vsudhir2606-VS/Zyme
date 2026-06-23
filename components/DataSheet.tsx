@@ -277,8 +277,18 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         name += ".xlsx";
       }
 
-      // XLSX.writeFile handles downloads built-in, natively supporting nested environment iframes
-      XLSX.writeFile(wb, name);
+      // Generate array buffer
+      const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+      const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
     } catch (err: any) {
       console.error(err);
       setError("Failed to export active reference data.");
