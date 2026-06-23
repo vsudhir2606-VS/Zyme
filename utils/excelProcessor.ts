@@ -163,13 +163,14 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         const rowDataSheetValues: string[][] = [];
         let maxUniqueValuesCount = 1;
 
-        // Build a robust normalized lookup cache to guarantee 100% accurate matches for punctuation, spacing variations
+         // Build a robust normalized lookup cache to guarantee 100% accurate matches for punctuation, spacing variations
         const normalizedRefCache: Record<string, string[]> = {};
         if (config.referenceData) {
           const refKeys = Object.keys(config.referenceData);
           for (let k = 0; k < refKeys.length; k++) {
             const originalKey = refKeys[k];
-            const originalVals = config.referenceData[originalKey] || [];
+            // Ensure values are copied and sorted descending by length (longest/most-words comment first)
+            const originalVals = [...(config.referenceData[originalKey] || [])].sort((a, b) => b.length - a.length);
             
             // Map the exact lowercase key
             normalizedRefCache[originalKey.toLowerCase().trim()] = originalVals;
@@ -206,11 +207,12 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
             // 2. Normalized Column I
             // 3. Exact Column J (Alternative Customer column)
             // 4. Normalized Column J
-            matched = (keyI_exact && normalizedRefCache[keyI_exact]) || 
-                      (keyI_norm && normalizedRefCache[keyI_norm]) || 
-                      (keyJ_exact && normalizedRefCache[keyJ_exact]) || 
-                      (keyJ_norm && normalizedRefCache[keyJ_norm]) || 
-                      [];
+            const rawMatched = (keyI_exact && normalizedRefCache[keyI_exact]) || 
+                               (keyI_norm && normalizedRefCache[keyI_norm]) || 
+                               (keyJ_exact && normalizedRefCache[keyJ_exact]) || 
+                               (keyJ_norm && normalizedRefCache[keyJ_norm]) || 
+                               [];
+            matched = [...rawMatched].sort((a, b) => b.length - a.length);
           }
           rowDataSheetValues.push(matched);
           if (matched.length > maxUniqueValuesCount) {
