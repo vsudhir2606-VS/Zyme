@@ -90,11 +90,13 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         let maxRecordMatches = 0;
 
         const findColumnsInRows = (sampleRows: any[][]): { customerColIndex: number; afColIndex: number } => {
-          let customerColIndex = 8; // default
-          let afColIndex = 31;     // default
+          let customerColIndex = 8; // default Column I (index 8)
+          let afColIndex = 31;     // default Column AF (index 31)
           let headerRowFound = false;
 
-          const scanRowsLimit = Math.min(sampleRows.length, 10);
+          const scanRowsLimit = Math.min(sampleRows.length, 15);
+          
+          // Strategy 1: Look for a row that contains BOTH a clear customer and an AF column header.
           for (let r = 0; r < scanRowsLimit; r++) {
             const row = sampleRows[r];
             if (!row || row.length === 0) continue;
@@ -106,7 +108,7 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
               const cellVal = String(row[c] || "").trim().toLowerCase();
               if (!cellVal) continue;
               
-              if (
+              const isCust = 
                 cellVal === "customer name" || 
                 cellVal === "customer" || 
                 cellVal === "client" || 
@@ -115,12 +117,9 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
                 cellVal === "i" ||
                 cellVal === "i column" ||
                 cellVal === "column i" ||
-                cellVal === "col i"
-              ) {
-                foundCust = c;
-              }
-              
-              if (
+                cellVal === "col i";
+                
+              const isAF = 
                 cellVal === "unique match af values 1" ||
                 cellVal === "unique match af values" ||
                 cellVal === "af" ||
@@ -130,49 +129,197 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
                 cellVal === "af values" ||
                 cellVal === "col af" ||
                 cellVal.includes("unique match af") ||
-                cellVal.includes("af values")
-              ) {
+                cellVal.includes("af values") ||
+                cellVal.includes("af values 1");
+
+              if (isCust) {
+                foundCust = c;
+              }
+              if (isAF) {
                 foundAF = c;
               }
             }
             
-            if (foundCust !== -1 || foundAF !== -1) {
-              if (foundCust !== -1) customerColIndex = foundCust;
-              if (foundAF !== -1) afColIndex = foundAF;
+            if (foundCust !== -1 && foundAF !== -1) {
+              customerColIndex = foundCust;
+              afColIndex = foundAF;
               headerRowFound = true;
               break;
             }
           }
 
+          // Strategy 2: If we didn't find a row with both headers, check for a row with at least ONE header match
           if (!headerRowFound) {
-            let maxLen = 0;
-            for (let r = 0; r < Math.min(sampleRows.length, 50); r++) {
-              if (sampleRows[r] && sampleRows[r].length > maxLen) {
-                maxLen = sampleRows[r].length;
-              }
-            }
-            
-            if (maxLen <= 5 && maxLen >= 2) {
-              const nonEvCols: number[] = [];
-              for (let r = 0; r < Math.min(sampleRows.length, 10); r++) {
-                const rData = sampleRows[r];
-                if (!rData) continue;
-                for (let c = 0; c < rData.length; c++) {
-                  if (rData[c] !== undefined && rData[c] !== null && String(rData[c]).trim() !== "") {
-                    if (!nonEvCols.includes(c)) {
-                      nonEvCols.push(c);
-                    }
-                  }
+            for (let r = 0; r < scanRowsLimit; r++) {
+              const row = sampleRows[r];
+              if (!row || row.length === 0) continue;
+              
+              let foundCust = -1;
+              let foundAF = -1;
+              
+              for (let c = 0; c < row.length; c++) {
+                const cellVal = String(row[c] || "").trim().toLowerCase();
+                if (!cellVal) continue;
+                
+                const isCust = 
+                  cellVal === "customer name" || 
+                  cellVal === "customer" || 
+                  cellVal === "client" || 
+                  cellVal === "client name" || 
+                  cellVal === "company" ||
+                  cellVal === "i" ||
+                  cellVal === "i column" ||
+                  cellVal === "column i" ||
+                  cellVal === "col i";
+                  
+                const isAF = 
+                  cellVal === "unique match af values 1" ||
+                  cellVal === "unique match af values" ||
+                  cellVal === "af" ||
+                  cellVal === "af column" ||
+                  cellVal === "column af" ||
+                  cellVal === "af value" ||
+                  cellVal === "af values" ||
+                  cellVal === "col af" ||
+                  cellVal.includes("unique match af") ||
+                  cellVal.includes("af values") ||
+                  cellVal.includes("af values 1");
+
+                if (isCust) {
+                  foundCust = c;
+                }
+                if (isAF) {
+                  foundAF = c;
                 }
               }
-              nonEvCols.sort((a, b) => a - b);
-              if (nonEvCols.length >= 2) {
-                customerColIndex = nonEvCols[0];
-                afColIndex = nonEvCols[1];
-              } else {
-                customerColIndex = 0;
-                afColIndex = 1;
+
+              if (foundCust !== -1 || foundAF !== -1) {
+                if (foundCust !== -1) {
+                  customerColIndex = foundCust;
+                  // Gather all non-empty columns to find the best alternative for AF
+                  const nonEvCols: number[] = [];
+                  for (let scanR = 0; scanR < Math.min(sampleRows.length, 20); scanR++) {
+                    const rData = sampleRows[scanR];
+                    if (!rData) continue;
+                    for (let colIdx = 0; colIdx < rData.length; colIdx++) {
+                      if (rData[colIdx] !== undefined && rData[colIdx] !== null && String(rData[colIdx]).trim() !== "") {
+                        if (!nonEvCols.includes(colIdx)) {
+                          nonEvCols.push(colIdx);
+                        }
+                      }
+                    }
+                  }
+                  nonEvCols.sort((a, b) => a - b);
+                  const otherCols = nonEvCols.filter(colIdx => colIdx !== foundCust);
+                  if (otherCols.length > 0) {
+                    // AF Column should be the one with the longest average length
+                    let bestOtherCol = otherCols[0];
+                    let maxAvgLen = -1;
+                    otherCols.forEach(colIdx => {
+                      let totalLen = 0;
+                      let nonEmpCount = 0;
+                      for (let sr = 0; sr < Math.min(sampleRows.length, 50); sr++) {
+                        const val = sampleRows[sr]?.[colIdx];
+                        if (val !== undefined && val !== null && String(val).trim() !== "") {
+                          totalLen += String(val).trim().length;
+                          nonEmpCount++;
+                        }
+                      }
+                      const avgLen = nonEmpCount > 0 ? totalLen / nonEmpCount : 0;
+                      if (avgLen > maxAvgLen) {
+                        maxAvgLen = avgLen;
+                        bestOtherCol = colIdx;
+                      }
+                    });
+                    afColIndex = bestOtherCol;
+                  } else {
+                    afColIndex = foundCust === 0 ? 1 : 0;
+                  }
+                } else if (foundAF !== -1) {
+                  afColIndex = foundAF;
+                  // Find the best alternative for Customer Name
+                  const nonEvCols: number[] = [];
+                  for (let scanR = 0; scanR < Math.min(sampleRows.length, 20); scanR++) {
+                    const rData = sampleRows[scanR];
+                    if (!rData) continue;
+                    for (let colIdx = 0; colIdx < rData.length; colIdx++) {
+                      if (rData[colIdx] !== undefined && rData[colIdx] !== null && String(rData[colIdx]).trim() !== "") {
+                        if (!nonEvCols.includes(colIdx)) {
+                          nonEvCols.push(colIdx);
+                        }
+                      }
+                    }
+                  }
+                  nonEvCols.sort((a, b) => a - b);
+                  const otherCols = nonEvCols.filter(colIdx => colIdx !== foundAF);
+                  if (otherCols.length > 0) {
+                    // Customer Column should be the one with the shortest average length (but non-zero)
+                    let bestOtherCol = otherCols[0];
+                    let minAvgLen = Infinity;
+                    otherCols.forEach(colIdx => {
+                      let totalLen = 0;
+                      let nonEmpCount = 0;
+                      for (let sr = 0; sr < Math.min(sampleRows.length, 50); sr++) {
+                        const val = sampleRows[sr]?.[colIdx];
+                        if (val !== undefined && val !== null && String(val).trim() !== "") {
+                          totalLen += String(val).trim().length;
+                          nonEmpCount++;
+                        }
+                      }
+                      const avgLen = nonEmpCount > 0 ? totalLen / nonEmpCount : 0;
+                      if (avgLen < minAvgLen && avgLen > 0) {
+                        minAvgLen = avgLen;
+                        bestOtherCol = colIdx;
+                      }
+                    });
+                    customerColIndex = bestOtherCol;
+                  } else {
+                    customerColIndex = foundAF === 0 ? 1 : 0;
+                  }
+                }
+                headerRowFound = true;
+                break;
               }
+            }
+          }
+
+          // Strategy 3: Pure automatic heuristic fallback if no headers matched at all.
+          if (!headerRowFound) {
+            const colStats: Record<number, { count: number; totalLen: number }> = {};
+            for (let r = 0; r < Math.min(sampleRows.length, 50); r++) {
+              const row = sampleRows[r];
+              if (!row) continue;
+              for (let c = 0; c < row.length; c++) {
+                const cellVal = row[c];
+                if (cellVal !== undefined && cellVal !== null && String(cellVal).trim() !== "") {
+                  if (!colStats[c]) {
+                    colStats[c] = { count: 0, totalLen: 0 };
+                  }
+                  colStats[c].count++;
+                  colStats[c].totalLen += String(cellVal).trim().length;
+                }
+              }
+            }
+
+            const activeCols = Object.keys(colStats).map(Number).sort((a, b) => a - b);
+            if (activeCols.length >= 2) {
+              // Sort active columns by their average string length
+              const sortedByLength = [...activeCols].sort((colA, colB) => {
+                const avgA = colStats[colA].totalLen / colStats[colA].count;
+                const avgB = colStats[colB].totalLen / colStats[colB].count;
+                return avgA - avgB;
+              });
+
+              // Shorter average length is Customer
+              customerColIndex = sortedByLength[0];
+              // Longer average length is AF Values
+              afColIndex = sortedByLength[sortedByLength.length - 1];
+            } else if (activeCols.length === 1) {
+              customerColIndex = activeCols[0];
+              afColIndex = activeCols[0] === 0 ? 1 : 0;
+            } else {
+              customerColIndex = 8;
+              afColIndex = 31;
             }
           }
 
