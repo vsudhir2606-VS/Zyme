@@ -89,21 +89,114 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         let selectedSheetName = workbook.SheetNames[0];
         let maxRecordMatches = 0;
 
+        const findColumnsInRows = (sampleRows: any[][]): { customerColIndex: number; afColIndex: number } => {
+          let customerColIndex = 8; // default
+          let afColIndex = 31;     // default
+          let headerRowFound = false;
+
+          const scanRowsLimit = Math.min(sampleRows.length, 10);
+          for (let r = 0; r < scanRowsLimit; r++) {
+            const row = sampleRows[r];
+            if (!row || row.length === 0) continue;
+            
+            let foundCust = -1;
+            let foundAF = -1;
+            
+            for (let c = 0; c < row.length; c++) {
+              const cellVal = String(row[c] || "").trim().toLowerCase();
+              if (!cellVal) continue;
+              
+              if (
+                cellVal === "customer name" || 
+                cellVal === "customer" || 
+                cellVal === "client" || 
+                cellVal === "client name" || 
+                cellVal === "company" ||
+                cellVal === "i" ||
+                cellVal === "i column" ||
+                cellVal === "column i" ||
+                cellVal === "col i"
+              ) {
+                foundCust = c;
+              }
+              
+              if (
+                cellVal === "unique match af values 1" ||
+                cellVal === "unique match af values" ||
+                cellVal === "af" ||
+                cellVal === "af column" ||
+                cellVal === "column af" ||
+                cellVal === "af value" ||
+                cellVal === "af values" ||
+                cellVal === "col af" ||
+                cellVal.includes("unique match af") ||
+                cellVal.includes("af values")
+              ) {
+                foundAF = c;
+              }
+            }
+            
+            if (foundCust !== -1 || foundAF !== -1) {
+              if (foundCust !== -1) customerColIndex = foundCust;
+              if (foundAF !== -1) afColIndex = foundAF;
+              headerRowFound = true;
+              break;
+            }
+          }
+
+          if (!headerRowFound) {
+            let maxLen = 0;
+            for (let r = 0; r < Math.min(sampleRows.length, 50); r++) {
+              if (sampleRows[r] && sampleRows[r].length > maxLen) {
+                maxLen = sampleRows[r].length;
+              }
+            }
+            
+            if (maxLen <= 5 && maxLen >= 2) {
+              const nonEvCols: number[] = [];
+              for (let r = 0; r < Math.min(sampleRows.length, 10); r++) {
+                const rData = sampleRows[r];
+                if (!rData) continue;
+                for (let c = 0; c < rData.length; c++) {
+                  if (rData[c] !== undefined && rData[c] !== null && String(rData[c]).trim() !== "") {
+                    if (!nonEvCols.includes(c)) {
+                      nonEvCols.push(c);
+                    }
+                  }
+                }
+              }
+              nonEvCols.sort((a, b) => a - b);
+              if (nonEvCols.length >= 2) {
+                customerColIndex = nonEvCols[0];
+                afColIndex = nonEvCols[1];
+              } else {
+                customerColIndex = 0;
+                afColIndex = 1;
+              }
+            }
+          }
+
+          return { customerColIndex, afColIndex };
+        };
+
         for (const name of workbook.SheetNames) {
           const ws = workbook.Sheets[name];
           if (!ws) continue;
           const sampleRows = getSheetSampleRows(ws);
           if (!sampleRows || sampleRows.length === 0) continue;
 
+          const { customerColIndex, afColIndex } = findColumnsInRows(sampleRows);
+
           let matchesCount = 0;
           sampleRows.forEach((row) => {
-            if (row && row.length > 8) {
-              const customerRaw = row[8];
-              const afRaw = row[31];
+            if (row) {
+              const customerRaw = row[customerColIndex];
+              const afRaw = row[afColIndex];
               if (customerRaw !== undefined && customerRaw !== null && afRaw !== undefined && afRaw !== null) {
                 const customerStr = String(customerRaw).trim();
                 const afStr = String(afRaw).trim();
-                if (customerStr && afStr && customerStr.toLowerCase() !== "customer name") {
+                const isHeaderName = customerStr.toLowerCase() === "customer name" || customerStr.toLowerCase() === "customer" || customerStr.toLowerCase() === "client" || customerStr.toLowerCase() === "client name" || customerStr.toLowerCase() === "company";
+                if (customerStr && afStr && !isHeaderName) {
                   matchesCount++;
                 }
               }
@@ -128,6 +221,8 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
           throw new Error("The uploaded file is empty.");
         }
 
+        const { customerColIndex, afColIndex } = findColumnsInRows(rows);
+
         // Using Set for duplicate identification rather than linear array search, O(1) matching!
         const processedSetMap: Record<string, Set<string>> = {};
 
@@ -140,13 +235,12 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         }
 
         // Start from index 0 or index 1 depending on header, but let's just parse all rows
-        // Column I is index 8 (Customer name), Column AF is index 31 (AF Data)
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || row.length <= 8) continue;
+          if (!row) continue;
 
-          const customerRaw = row[8];
-          const afRaw = row[31];
+          const customerRaw = row[customerColIndex];
+          const afRaw = row[afColIndex];
 
           if (customerRaw !== undefined && customerRaw !== null && afRaw !== undefined && afRaw !== null) {
             const customerStr = String(customerRaw).trim();
@@ -155,7 +249,8 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
               afStr = afStr.slice(0, 32750) + "... [truncated]";
             }
 
-            if (customerStr && afStr && customerStr.toLowerCase() !== "customer name") {
+            const isHeaderName = customerStr.toLowerCase() === "customer name" || customerStr.toLowerCase() === "customer" || customerStr.toLowerCase() === "client" || customerStr.toLowerCase() === "client name" || customerStr.toLowerCase() === "company" || customerStr.toLowerCase() === "col i" || customerStr.toLowerCase() === "column i" || customerStr.toLowerCase() === "i";
+            if (customerStr && afStr && !isHeaderName) {
               const key = customerStr.toLowerCase();
               let sSet = processedSetMap[key];
               if (!sSet) {
@@ -177,7 +272,7 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         }
 
         if (clientKeys.length === 0) {
-          throw new Error("No matching records found. Ensure Customer Name is in Column I and Data is in Column AF.");
+          throw new Error("No matching records found. Ensure your file contains a Customer Name column and an AF Values column.");
         }
 
         const targetFileName = isAppend && referenceFileName
@@ -187,7 +282,7 @@ export const DataSheet: React.FC<DataSheetProps> = ({ onDataLoaded, referenceDat
         onDataLoaded(processedMap, targetFileName);
       } catch (err: any) {
         console.error(err);
-        setError(err.message || "An error occurred while parsing the Data Sheet. Ensure Customer Name is in Column I and Data falls in Column AF.");
+        setError(err.message || "An error occurred while parsing the Data Sheet. Ensure Customer Name column and AF Values column are present.");
       } finally {
         setLoading(false);
         if (appendFileInputRef.current) {
