@@ -7,14 +7,38 @@ export interface ProcessConfig {
 }
 
 /**
+ * Removes common corporate keywords and suffixes (like GMBH, CO, LTD, INC, LLC, AG, etc.)
+ * to allow fairer comparison.
+ */
+const removeCommonKeywords = (s: string): string => {
+  if (!s) return "";
+  const commonKeywords = new Set([
+    "gmbh", "co", "ltd", "inc", "corp", "corporation", "limited", "llc", "plc", 
+    "ag", "sa", "sarl", "ab", "as", "kg", "bv", "nv", "pty", "srl", "and", "und", "et", "amp"
+  ]);
+
+  // Split by non-word characters and filter out the common keywords
+  const words = s.toLowerCase().split(/\W+/);
+  const filteredWords = words.filter(word => word && !commonKeywords.has(word));
+  
+  // Fallback to original lowercase string if everything got filtered out
+  if (filteredWords.length === 0) {
+    return s.toLowerCase();
+  }
+  return filteredWords.join(" ");
+};
+
+/**
  * Calculates a simple similarity score between two strings (0 to 100).
  * Uses a basic Levenshtein-based similarity.
  */
 const calculateSimilarity = (s1: string, s2: string): number => {
   if (!s1 || !s2) return 0;
-  s1 = s1.toLowerCase();
-  s2 = s2.toLowerCase();
-  if (s1 === s2) return 100;
+  
+  const kw1 = removeCommonKeywords(s1);
+  const kw2 = removeCommonKeywords(s2);
+
+  if (kw1 === kw2) return 100;
 
   const editDistance = (a: string, b: string): number => {
     const matrix = Array.from({ length: a.length + 1 }, () => 
@@ -40,8 +64,53 @@ const calculateSimilarity = (s1: string, s2: string): number => {
     return matrix[a.length][b.length];
   };
 
-  const distance = editDistance(s1, s2);
-  const maxLength = Math.max(s1.length, s2.length);
+  const distance = editDistance(kw1, kw2);
+  const maxLength = Math.max(kw1.length, kw2.length);
+  return Math.round(((maxLength - distance) / maxLength) * 100);
+};
+
+/**
+ * Calculates similarity of strings using letters only (ignores special characters, numbers, and spaces).
+ * e.g., "a-b-c" matches "abc" with 100%.
+ */
+const calculateLetterOnlySimilarity = (s1: string, s2: string): number => {
+  if (!s1 || !s2) return 0;
+
+  const kw1 = removeCommonKeywords(s1);
+  const kw2 = removeCommonKeywords(s2);
+
+  const clean1 = kw1.replace(/[^a-z]/g, "");
+  const clean2 = kw2.replace(/[^a-z]/g, "");
+
+  if (!clean1 || !clean2) return 0;
+  if (clean1 === clean2) return 100;
+
+  const editDistance = (a: string, b: string): number => {
+    const matrix = Array.from({ length: a.length + 1 }, () => 
+      Array.from({ length: b.length + 1 }, () => 0)
+    );
+
+    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
+    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+
+    for (let i = 1; i <= a.length; i++) {
+      for (let j = 1; j <= b.length; j++) {
+        if (a[i - 1] === b[j - 1]) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    return matrix[a.length][b.length];
+  };
+
+  const distance = editDistance(clean1, clean2);
+  const maxLength = Math.max(clean1.length, clean2.length);
   return Math.round(((maxLength - distance) / maxLength) * 100);
 };
 
@@ -140,23 +209,25 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           "File name",        // B: From Input Column C (index 2)
           "Ref No",           // C: From Input Column D (index 3)
           "Customer Name",    // D: From Input Column I (index 8)
-          "City",             // E: From Input Column L (index 11)
-          "CTR",              // F: From Input Column O (index 14)
-          "RPL 1",            // G: Extracted Match Name 1
-          "RPL 2",            // H: Match Name 2
-          "RPL 3",            // I: Match Name 3
-          "RPL 4",            // J: Match Name 4
-          "RPL 5",            // K: Match Name 5
-          "Denial Type 1",    // L: Extracted Denial Type 1
-          "Denial Type 2",    // M: Denial Type 2
-          "Denial Type 3",    // N: Denial Type 3
-          "Denial Type 4",    // O: Denial Type 4
-          "Denial Type 5",    // P: Denial Type 5
-          "Splid 1",          // Q: Extracted Splid 1
-          "Splid 2",          // R: Extracted Splid 2
-          "Splid 3",          // S: Extracted Splid 3
-          "Splid 4",          // T: Extracted Splid 4
-          "Splid 5",          // U: Extracted Splid 5
+          "Address 1",        // E: From Input Column J (index 9)
+          "Address 2",        // F: From Input Column K (index 10)
+          "City",             // G: From Input Column L (index 11)
+          "CTR",              // H: From Input Column O (index 14)
+          "RPL 1",            // I: Extracted Match Name 1
+          "RPL 2",            // J: Match Name 2
+          "RPL 3",            // K: Match Name 3
+          "RPL 4",            // L: Match Name 4
+          "RPL 5",            // M: Match Name 5
+          "Denial Type 1",    // N: Extracted Denial Type 1
+          "Denial Type 2",    // O: Denial Type 2
+          "Denial Type 3",    // P: Denial Type 3
+          "Denial Type 4",    // Q: Denial Type 4
+          "Denial Type 5",    // R: Denial Type 5
+          "Splid 1",          // S: Extracted Splid 1
+          "Splid 2",          // T: Extracted Splid 2
+          "Splid 3",          // U: Extracted Splid 3
+          "Splid 4",          // V: Extracted Splid 4
+          "Splid 5",          // W: Extracted Splid 5
         ];
 
         // Pre-analyze unique reference matching columns to specify header size dynamically
@@ -235,10 +306,12 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           const rawRow = jsonData[i];
           if (!rawRow || rawRow.length === 0) continue;
 
-          // Mapping logic (Raw Column -> Index): C=2, D=3, I=8, L=11, O=14, W=22, AA=26
+          // Mapping logic (Raw Column -> Index): C=2, D=3, I=8, J=9, K=10, L=11, O=14, W=22, AA=26
           const rawC = getCellValue(rawRow, 2);  // Column C
           const rawD = getCellValue(rawRow, 3);  // Column D
           const rawI = getCellValue(rawRow, 8);  // Column I (Customer Name)
+          const rawJ = getCellValue(rawRow, 9);  // Column J (Address 1)
+          const rawK = getCellValue(rawRow, 10); // Column K (Address 2)
           const rawL = getCellValue(rawRow, 11); // Column L (City)
           const rawO = getCellValue(rawRow, 14); // Column O (CTR)
           const rawW = getCellValue(rawRow, 22); // Column W (Search Data)
@@ -250,8 +323,8 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           const hasZKWD = combinedSearchText.includes("ZKWD");
           const hasZEMB = combinedSearchText.includes("ZEMB");
           
-          // Updated "No add" condition: Only Columns L (City) and O (CTR) are blank
-          const isNoAdd = rawL === "" && rawO === "";
+          // "No add" condition: Address 1 (J), Address 2 (K), City (L), and CTR (O) are ALL blank
+          const isNoAdd = rawJ === "" && rawK === "" && rawL === "" && rawO === "";
           
           // Case-insensitive partial match for High Risk Keywords in Customer Name
           const isHighRisk = config.highRiskKeywords.some(kw => 
@@ -290,23 +363,25 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
             rawC,                  // B
             rawD,                  // C
             rawI,                  // D
-            rawL,                  // E
-            rawO,                  // F
-            matchNames[0] || "",   // G
-            matchNames[1] || "",   // H
-            matchNames[2] || "",   // I
-            matchNames[3] || "",   // J
-            matchNames[4] || "",   // K
-            denialTypes[0] || "",  // L
-            denialTypes[1] || "",  // M
-            denialTypes[2] || "",  // N
-            denialTypes[3] || "",  // O
-            denialTypes[4] || "",  // P
-            splids[0] || "",       // Q
-            splids[1] || "",       // R
-            splids[2] || "",       // S
-            splids[3] || "",       // T
-            splids[4] || "",       // U
+            rawJ,                  // E (Address 1)
+            rawK,                  // F (Address 2)
+            rawL,                  // G (City)
+            rawO,                  // H (CTR)
+            matchNames[0] || "",   // I
+            matchNames[1] || "",   // J
+            matchNames[2] || "",   // K
+            matchNames[3] || "",   // L
+            matchNames[4] || "",   // M
+            denialTypes[0] || "",  // N
+            denialTypes[1] || "",  // O
+            denialTypes[2] || "",  // P
+            denialTypes[3] || "",  // Q
+            denialTypes[4] || "",  // R
+            splids[0] || "",       // S
+            splids[1] || "",       // T
+            splids[2] || "",       // U
+            splids[3] || "",       // V
+            splids[4] || "",       // W
           ];
 
           // Append values of Column AF mapping starting from V (index 21)
@@ -332,32 +407,39 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
 
         // Generate additional sheets for RPL Fuzzy Lookups
         for (let rplIdx = 1; rplIdx <= 5; rplIdx++) {
-          const rplHeader = ["Customer Name", `RPL ${rplIdx}`, "Fuzzy Match %", "Matching Words"];
+          const rplHeader = ["Customer Name", `RPL ${rplIdx}`, "Fuzzy Match %", "Letter-Only Match %", "Matching Words"];
           const dataRows: any[][] = [];
 
           // Skip header row in processedRows
           for (let i = 1; i < processedRows.length; i++) {
             const row = processedRows[i];
             const customerName = row[3]; // Column D
-            const rplValue = row[5 + rplIdx]; // RPL 1 is at index 6, RPL 2 at 7, etc.
+            const rplValue = row[7 + rplIdx]; // RPL 1 is at index 8 (7+1), RPL 2 at index 9 (7+2), etc.
 
             if (customerName && rplValue) {
               const similarity = calculateSimilarity(customerName, rplValue);
+              const letterSimilarity = calculateLetterOnlySimilarity(customerName, rplValue);
               const matchingWords = getMatchingWords(customerName, rplValue);
-              dataRows.push([customerName, rplValue, similarity, matchingWords]);
+              dataRows.push([customerName, rplValue, similarity, letterSimilarity, matchingWords]);
             }
           }
 
           if (dataRows.length > 0) {
-            // Sort by similarity percentage descending
-            dataRows.sort((a, b) => b[2] - a[2]);
+            // Sort by Letter-Only Match % descending, then by Fuzzy Match % descending
+            dataRows.sort((a, b) => {
+              if (b[3] !== a[3]) {
+                return b[3] - a[3];
+              }
+              return b[2] - a[2];
+            });
 
             // Format similarity as percentage string for display and clamp to 32750 chars
             const formattedRows = dataRows.map(row => [
               row[0],
               row[1],
               `${row[2]}%`,
-              row[3]
+              `${row[3]}%`,
+              row[4]
             ]).map(row => 
               row.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
             );
