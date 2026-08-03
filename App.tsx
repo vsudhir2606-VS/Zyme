@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table } from 'lucide-react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
+import { OofConsolidator } from './components/OofConsolidator.tsx';
 import { DataSheet } from './components/DataSheet.tsx';
 import { getReferenceData, saveReferenceData, clearReferenceData } from './utils/db.ts';
 
@@ -17,7 +18,7 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'consolidator' | 'inventory' | 'datasheet';
+type AppTab = 'processor' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
@@ -135,6 +136,13 @@ export default function App() {
             >
               <Layers size={18} />
               <span className="text-sm font-semibold">Zyme Consolidator</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('oof_consolidator')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'oof_consolidator' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
+            >
+              <FolderArchive size={18} />
+              <span className="text-sm font-semibold">Off Consolidator</span>
             </button>
             <button 
               onClick={() => setActiveTab('inventory')}
@@ -276,6 +284,8 @@ export default function App() {
                 ? 'Data Processing' 
                 : activeTab === 'consolidator' 
                 ? 'Data Consolidation' 
+                : activeTab === 'oof_consolidator'
+                ? 'Off Consolidation'
                 : activeTab === 'inventory' 
                 ? 'Inventory Reporting' 
                 : 'Data Sheet'}
@@ -285,6 +295,8 @@ export default function App() {
                 ? 'Manage and transform your compliance datasets' 
                 : activeTab === 'consolidator'
                 ? 'Merge multiple reports into a master dataset'
+                : activeTab === 'oof_consolidator'
+                ? 'Consolidate reports and attach source file name in Column A for all rows'
                 : activeTab === 'inventory'
                 ? 'Generate daily inventory status comments from Excel files'
                 : 'Upload global customer mappings to enrich your compliance sheet Column V'}
@@ -311,6 +323,8 @@ export default function App() {
           />
         ) : activeTab === 'consolidator' ? (
           <Consolidator />
+        ) : activeTab === 'oof_consolidator' ? (
+          <OofConsolidator />
         ) : activeTab === 'inventory' ? (
           <InventoryReport />
         ) : (
