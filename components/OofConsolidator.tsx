@@ -10,6 +10,9 @@ export const OofConsolidator: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(true);
   const [searchFilter, setSearchFilter] = useState('');
+  const [removeBlankColumnB, setRemoveBlankColumnB] = useState(true);
+  const [removeDuplicateHeaders, setRemoveDuplicateHeaders] = useState(true);
+  const [includeMasterHeader, setIncludeMasterHeader] = useState(true);
 
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -55,7 +58,10 @@ export const OofConsolidator: React.FC = () => {
     try {
       const result = await consolidateOofFiles(files, {
         onProgress: (p) => setProgress(p),
-        signal: controller.signal
+        signal: controller.signal,
+        removeBlankColumnB,
+        removeDuplicateHeaders,
+        includeMasterHeader
       });
       setProcessedResult(result);
     } catch (err: any) {
@@ -277,6 +283,54 @@ export const OofConsolidator: React.FC = () => {
                   </button>
                 </div>
               )}
+
+              {/* Consolidation Settings */}
+              <div className="mt-6 p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 space-y-3">
+                <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Consolidation Options</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-600">
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input 
+                      type="checkbox" 
+                      checked={removeBlankColumnB} 
+                      onChange={(e) => setRemoveBlankColumnB(e.target.checked)}
+                      disabled={processing}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 border-slate-300"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800">Remove blank Column B</span>
+                      <p className="text-[11px] text-slate-500">Strips empty spacer Column B so columns align directly with File Name in Col A</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                    <input 
+                      type="checkbox" 
+                      checked={removeDuplicateHeaders} 
+                      onChange={(e) => setRemoveDuplicateHeaders(e.target.checked)}
+                      disabled={processing}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 border-slate-300"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800">Prevent headers from splitting data</span>
+                      <p className="text-[11px] text-slate-500">Removes repetitive headers from individual files so data flows continuously</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 cursor-pointer select-none sm:col-span-2">
+                    <input 
+                      type="checkbox" 
+                      checked={includeMasterHeader} 
+                      onChange={(e) => setIncludeMasterHeader(e.target.checked)}
+                      disabled={processing}
+                      className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 w-4 h-4 border-slate-300"
+                    />
+                    <div>
+                      <span className="font-semibold text-slate-800">Keep 1 master header row at top (Row 1)</span>
+                      <p className="text-[11px] text-slate-500">Includes the column title row once at the top of the worksheet (uncheck for 100% pure raw data)</p>
+                    </div>
+                  </label>
+                </div>
+              </div>
 
               <div className="mt-8">
                 <button 

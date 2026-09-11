@@ -402,7 +402,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         const clampedProcessedRows = processedRows.map(row => 
           row.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
         );
-        const mainWs = XLSX.utils.aoa_to_sheet(clampedProcessedRows);
+        const mainWs = (XLSX.utils.aoa_to_sheet as any)(clampedProcessedRows, { dense: true });
         XLSX.utils.book_append_sheet(newWb, mainWs, "Processed Report");
 
         // Generate additional sheets for RPL Fuzzy Lookups
@@ -444,7 +444,7 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
               row.map(val => (typeof val === 'string' && val.length > 32750) ? (val.slice(0, 32750) + "... [truncated]") : val)
             );
 
-            const rplWs = XLSX.utils.aoa_to_sheet([rplHeader, ...formattedRows]);
+            const rplWs = (XLSX.utils.aoa_to_sheet as any)([rplHeader, ...formattedRows], { dense: true });
             XLSX.utils.book_append_sheet(newWb, rplWs, `RPL ${rplIdx} Lookup`);
           }
         }

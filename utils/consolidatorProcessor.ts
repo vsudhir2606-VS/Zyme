@@ -171,10 +171,13 @@ export const consolidateFiles = async (
 
   const workbook = XLSX.utils.book_new();
 
-  const ws1 = XLSX.utils.aoa_to_sheet(sheet1Rows.length > 0 ? sheet1Rows : [["No Data"]]);
+  const ws1 = (XLSX.utils.aoa_to_sheet as any)(
+    sheet1Rows.length > 0 ? sheet1Rows : [["No Data"]],
+    { dense: true }
+  );
   XLSX.utils.book_append_sheet(workbook, ws1, 'Sheet1');
 
-  const ws2 = XLSX.utils.aoa_to_sheet(sheet2Rows);
+  const ws2 = (XLSX.utils.aoa_to_sheet as any)(sheet2Rows, { dense: true });
   XLSX.utils.book_append_sheet(workbook, ws2, 'Sheet2');
 
   const buffer = XLSX.write(workbook, {

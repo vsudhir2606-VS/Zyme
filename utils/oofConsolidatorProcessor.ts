@@ -20,12 +20,19 @@ export interface OofConsolidationResult {
 export interface ConsolidateOptions {
   onProgress?: (progress: ProgressUpdate) => void;
   signal?: AbortSignal;
+  removeBlankColumnB?: boolean;
+  removeDuplicateHeaders?: boolean;
+  includeMasterHeader?: boolean;
 }
 
-const MAX_ROWS_PER_SHEET = 1000000; // Keep safely below Excel's 1,048,576 limit
+const MAX_ROWS_PER_SHEET = 200000; // Optimal chunk size for speed and zero memory pressure
 
 const clampCell = (val: any): any => {
   if (val === undefined || val === null) return "";
+  if (val instanceof Date) return val;
+  if (typeof val === 'object') {
+    return String(val.v ?? val.text ?? val.w ?? "");
+  }
   if (typeof val === 'string' && val.length > 32750) {
     return val.slice(0, 32750) + "... [truncated]";
   }
@@ -35,7 +42,8 @@ const clampCell = (val: any): any => {
 /**
  * Consolidates multiple Excel/CSV files (even up to 200+ huge files) into a single XLSX file.
  * The source file name is prepended to Column A for every row.
- * Uses low-overhead data structures and event-loop yielding to prevent browser freezing and out-of-memory crashes.
+ * Uses SheetJS dense mode and event-loop yielding to prevent "Too many properties to enumerate"
+ * and browser memory crashes.
  */
 export const consolidateOofFiles = async (
   files: File[],
@@ -45,7 +53,14 @@ export const consolidateOofFiles = async (
     throw new Error("No files selected for consolidation.");
   }
 
-  const { onProgress, signal } = options || {};
+  const { 
+    onProgress, 
+    signal, 
+    removeBlankColumnB = true, 
+    removeDuplicateHeaders = true,
+    includeMasterHeader = true 
+  } = options || {};
+
   const previewRows: any[][] = [];
   const warnings: string[] = [];
   let totalRowCount = 0;
@@ -53,13 +68,14 @@ export const consolidateOofFiles = async (
   // SheetJS workbook
   const workbook = XLSX.utils.book_new();
 
-  // We accumulate rows into sheet chunks to prevent exceeding Excel sheet row limit
+  // Accumulate rows into sheet chunks to prevent exceeding Excel sheet row limit
   let currentSheetRows: any[][] = [];
   let sheetIndex = 1;
 
   const flushCurrentSheet = () => {
     if (currentSheetRows.length === 0) return;
-    const ws = XLSX.utils.aoa_to_sheet(currentSheetRows);
+    // CRITICAL: Must use dense mode so cells are stored in 2D array, not as millions of object properties
+    const ws = (XLSX.utils.aoa_to_sheet as any)(currentSheetRows, { dense: true });
     const sheetTitle = sheetIndex === 1 ? 'Off Consolidated' : `Off Consolidated (${sheetIndex})`;
     XLSX.utils.book_append_sheet(workbook, ws, sheetTitle);
     currentSheetRows = [];
@@ -67,6 +83,7 @@ export const consolidateOofFiles = async (
   };
 
   const totalFiles = files.length;
+  let headerSignature = '';
 
   for (let fileIdx = 0; fileIdx < totalFiles; fileIdx++) {
     if (signal?.aborted) {
@@ -122,6 +139,15 @@ export const consolidateOofFiles = async (
         continue;
       }
 
+      // Check if Column B is blank or candidate for removal
+      // If removeBlankColumnB is enabled, we check if index 1 is blank across rows
+      const hasColumnB = jsonData.some(r => r && r.length > 1);
+      const isColBActuallyBlank = hasColumnB && jsonData.slice(0, 30).every(
+        r => !r || r.length <= 1 || r[1] === "" || r[1] === null || r[1] === undefined || String(r[1]).trim() === ""
+      );
+
+      const shouldDropColB = removeBlankColumnB && (isColBActuallyBlank || hasColumnB);
+
       // Process rows for this file
       for (let r = 0; r < jsonData.length; r++) {
         const rawRow = jsonData[r];
@@ -131,19 +157,39 @@ export const consolidateOofFiles = async (
         const hasContent = rawRow.some(cell => cell !== "" && cell !== null && cell !== undefined);
         if (!hasContent) continue;
 
-        // Build row with file name in Column A
-        const rowWithFileName: any[] = new Array(rawRow.length + 1);
-        rowWithFileName[0] = file.name;
+        // Build clean row (filtering Column B if requested/blank)
+        const cleanRow: any[] = [file.name];
         for (let c = 0; c < rawRow.length; c++) {
-          rowWithFileName[c + 1] = clampCell(rawRow[c]);
+          if (shouldDropColB && c === 1) {
+            // Drop the blank B column
+            continue;
+          }
+          cleanRow.push(clampCell(rawRow[c]));
         }
 
-        currentSheetRows.push(rowWithFileName);
+        // Row signature to detect repeated headers
+        const rowSig = rawRow.map(c => String(c ?? '').trim().toLowerCase()).join('|');
+
+        // If this is row 0 of the first file, save header signature
+        if (fileIdx === 0 && r === 0) {
+          headerSignature = rowSig;
+          if (!includeMasterHeader) {
+            // User opted out of master header
+            continue;
+          }
+        } else if (removeDuplicateHeaders) {
+          // If this is row 0 of any subsequent file, or matches header signature, skip it so headers don't split data
+          if (r === 0 || (headerSignature && rowSig === headerSignature)) {
+            continue;
+          }
+        }
+
+        currentSheetRows.push(cleanRow);
         totalRowCount++;
 
         // Store up to 100 sample rows for instant preview
         if (previewRows.length < 100) {
-          previewRows.push(rowWithFileName);
+          previewRows.push(cleanRow);
         }
 
         // If current sheet reaches limit, flush to workbook and start next sheet
@@ -151,8 +197,8 @@ export const consolidateOofFiles = async (
           flushCurrentSheet();
         }
 
-        // Yield occasionally on massive individual files (e.g. every 20,000 rows)
-        if (r > 0 && r % 20000 === 0) {
+        // Yield occasionally on massive individual files (every 15,000 rows)
+        if (r > 0 && r % 15000 === 0) {
           if (onProgress) {
             onProgress({
               currentFile: fileIdx + 1,
@@ -177,7 +223,7 @@ export const consolidateOofFiles = async (
     flushCurrentSheet();
   } else if (workbook.SheetNames.length === 0) {
     // If all files were empty, create at least an empty sheet
-    const emptyWs = XLSX.utils.aoa_to_sheet([["File Name", "No Data Found"]]);
+    const emptyWs = (XLSX.utils.aoa_to_sheet as any)([["File Name", "No Data Found"]], { dense: true });
     XLSX.utils.book_append_sheet(workbook, emptyWs, 'Off Consolidated');
   }
 
