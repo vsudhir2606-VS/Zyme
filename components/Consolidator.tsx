@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, Layers, Trash2 } from 'lucide-react';
-import { consolidateFiles, ConsolidationResult } from '../utils/consolidatorProcessor.ts';
+import React, { useState, useRef } from 'react';
+import { Upload, FileSpreadsheet, CheckCircle2, Download, FileText, Loader2, X, Layers, Trash2, StopCircle, Search, AlertCircle } from 'lucide-react';
+import { consolidateFiles, ConsolidationResult, ConsolidatorProgressUpdate } from '../utils/consolidatorProcessor.ts';
 
 export const Consolidator: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState<ConsolidatorProgressUpdate | null>(null);
   const [processedResult, setProcessedResult] = useState<ConsolidationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [searchFilter, setSearchFilter] = useState('');
+
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -22,22 +26,47 @@ export const Consolidator: React.FC = () => {
     setProcessedResult(null);
   };
 
+  const handleCancel = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setProcessing(false);
+  };
+
   const handleConsolidate = async () => {
     if (files.length === 0) return;
 
     setProcessing(true);
     setError(null);
     setProcessedResult(null);
+    setProgress({
+      currentFile: 0,
+      totalFiles: files.length,
+      fileName: 'Preparing consolidation...',
+      totalRows: 0,
+      percent: 0,
+      stage: 'reading'
+    });
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
-      await new Promise(resolve => setTimeout(resolve, 1500)); // Smooth animation delay
-      const result = await consolidateFiles(files);
+      const result = await consolidateFiles(files, {
+        onProgress: (p) => setProgress(p),
+        signal: controller.signal
+      });
       setProcessedResult(result);
     } catch (err: any) {
-      console.error(err);
-      setError(err.message || "An error occurred while consolidating files.");
+      if (err.message && err.message.includes('cancelled')) {
+        setError("Consolidation cancelled.");
+      } else {
+        console.error(err);
+        setError(err.message || "An error occurred while consolidating files.");
+      }
     } finally {
       setProcessing(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -58,26 +87,34 @@ export const Consolidator: React.FC = () => {
     setFiles([]);
     setProcessedResult(null);
     setError(null);
+    setProgress(null);
+    setSearchFilter('');
   };
 
+  const totalSizeMB = (files.reduce((acc, f) => acc + f.size, 0) / (1024 * 1024)).toFixed(1);
+
+  const filteredFiles = searchFilter.trim() === '' 
+    ? files 
+    : files.filter(f => f.name.toLowerCase().includes(searchFilter.toLowerCase()));
+
   return (
-    <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-8">
-      <div className="w-full max-w-3xl transform transition-all duration-500">
+    <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto">
+      <div className="w-full max-w-4xl transform transition-all duration-500 my-auto">
         
         {/* GLASS CARD */}
         <div className="bg-white/70 backdrop-blur-xl rounded-3xl shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] border border-white/60 overflow-hidden ring-1 ring-white/60">
           
           {!processedResult ? (
             // Upload State
-            <div className="p-10 relative">
+            <div className="p-8 md:p-10 relative">
               <div className="mb-8 text-center">
                 <div className="relative inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-gradient-to-tr from-indigo-50 to-white mb-6 shadow-xl shadow-indigo-500/10 border border-white">
                   <div className="absolute inset-0 bg-indigo-500/5 rounded-2xl blur-lg"></div>
                   <Layers className="w-9 h-9 text-indigo-600 relative z-10" />
                 </div>
                 <h3 className="text-2xl font-bold text-slate-800 mb-2">Zyme Consolidator</h3>
-                <p className="text-slate-500 text-sm max-w-md mx-auto">
-                  Merge multiple Excel files into a single master report. Perfect for combining weekly or regional datasets.
+                <p className="text-slate-500 text-sm max-w-md mx-auto leading-relaxed">
+                  Merge multiple Excel files (up to 200+ huge files) into a master report with Sheet 1 (Full Data) and Sheet 2 (Mapped Columns).
                 </p>
               </div>
 
@@ -89,14 +126,14 @@ export const Consolidator: React.FC = () => {
                       group relative flex flex-col items-center justify-center w-full h-64 rounded-2xl border-2 border-dashed
                       transition-all duration-300 cursor-pointer overflow-hidden bg-slate-50/50
                       border-slate-300 hover:border-indigo-400 hover:bg-white/80
-                      ${processing ? 'pointer-events-none opacity-80' : ''}
+                      ${processing ? 'pointer-events-none opacity-60' : ''}
                     `}
                   >
                     <input 
                       type="file" 
                       className="hidden" 
                       multiple
-                      accept=".xlsx, .xls, .xlsm, .xlsb, .csv" 
+                      accept=".xlsx, .xls, .xlsm, .xlsb, .csv, .ods" 
                       onChange={handleFileChange} 
                     />
                     
@@ -105,7 +142,7 @@ export const Consolidator: React.FC = () => {
                         <Upload size={24} className="opacity-50 group-hover:opacity-100" />
                       </div>
                       <div className="text-center px-4">
-                        <span className="text-sm font-semibold text-slate-600 group-hover:text-indigo-600">Select Files</span>
+                        <span className="text-sm font-semibold text-slate-600 group-hover:text-indigo-600">Select Files (Up to 200+)</span>
                         <p className="text-xs font-medium opacity-70 mt-1">Drag and drop multiple files to merge them</p>
                       </div>
                     </div>
@@ -114,23 +151,55 @@ export const Consolidator: React.FC = () => {
 
                 {/* File List */}
                 <div className="flex flex-col h-64 bg-slate-900/5 rounded-2xl border border-slate-200/60 overflow-hidden">
-                  <div className="p-3 border-b border-slate-200/60 bg-white/40 flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Queue ({files.length})</span>
-                    {files.length > 0 && (
-                      <button onClick={() => setFiles([])} className="text-[10px] font-bold text-red-500 hover:text-red-600 transition-colors uppercase tracking-wider">Clear All</button>
+                  <div className="p-3 border-b border-slate-200/60 bg-white/40 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Queue ({files.length})</span>
+                      {files.length > 0 && (
+                        <span className="text-[10px] font-semibold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-100">
+                          {totalSizeMB} MB
+                        </span>
+                      )}
+                    </div>
+                    {files.length > 0 && !processing && (
+                      <button 
+                        onClick={() => setFiles([])} 
+                        className="text-[10px] font-bold text-red-500 hover:text-red-600 transition-colors uppercase tracking-wider"
+                      >
+                        Clear All
+                      </button>
                     )}
                   </div>
+
+                  {files.length > 6 && (
+                    <div className="p-2 border-b border-slate-200/60 bg-white/60">
+                      <div className="relative flex items-center">
+                        <Search size={12} className="absolute left-2.5 text-slate-400" />
+                        <input
+                          type="text"
+                          placeholder="Filter queue..."
+                          value={searchFilter}
+                          onChange={(e) => setSearchFilter(e.target.value)}
+                          className="w-full pl-7 pr-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex-1 overflow-y-auto p-2 space-y-2 scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
                     {files.length === 0 ? (
                       <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-60">
                         <FileText size={32} strokeWidth={1.5} />
                         <p className="text-[10px] font-bold uppercase mt-2">No files selected</p>
                       </div>
+                    ) : filteredFiles.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-400 text-xs">
+                        No files matching "{searchFilter}"
+                      </div>
                     ) : (
-                      files.map((f, idx) => (
+                      filteredFiles.map((f, idx) => (
                         <div key={`${f.name}-${idx}`} className="flex items-center justify-between p-2.5 bg-white rounded-xl border border-slate-200/60 shadow-sm animate-in slide-in-from-right-2 duration-200">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="p-1.5 bg-indigo-50 rounded-lg">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="p-1.5 bg-indigo-50 rounded-lg flex-shrink-0">
                               <FileSpreadsheet size={14} className="text-indigo-600" />
                             </div>
                             <div className="min-w-0">
@@ -138,18 +207,59 @@ export const Consolidator: React.FC = () => {
                               <p className="text-[10px] text-slate-400">{(f.size / 1024).toFixed(1)} KB</p>
                             </div>
                           </div>
-                          <button 
-                            onClick={() => removeFile(idx)}
-                            className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {!processing && (
+                            <button 
+                              onClick={() => removeFile(files.indexOf(f))}
+                              className="p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all flex-shrink-0"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       ))
                     )}
                   </div>
                 </div>
               </div>
+
+              {/* Progress UI for Huge Datasets / 200 Files */}
+              {processing && progress && (
+                <div className="mt-6 p-5 bg-indigo-50/70 border border-indigo-100 rounded-2xl backdrop-blur-sm shadow-sm space-y-3">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 font-bold text-indigo-950">
+                      <Loader2 size={14} className="animate-spin text-indigo-600" />
+                      <span>Processing file {progress.currentFile} of {progress.totalFiles}</span>
+                    </div>
+                    <span className="font-mono font-bold text-indigo-700 text-sm">{progress.percent}%</span>
+                  </div>
+
+                  <div className="w-full h-2.5 bg-indigo-200/60 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-gradient-to-r from-indigo-600 to-violet-600 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(3, progress.percent)}%` }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-600">
+                    <span className="truncate max-w-[280px] font-mono text-slate-700" title={progress.fileName}>
+                      📄 {progress.fileName}
+                    </span>
+                    <span className="font-semibold text-indigo-900">
+                      {progress.totalRows.toLocaleString()} rows consolidated
+                    </span>
+                  </div>
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      onClick={handleCancel}
+                      className="flex items-center gap-1.5 px-3 py-1 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded-lg text-xs font-semibold shadow-xs transition-colors"
+                    >
+                      <StopCircle size={14} />
+                      <span>Cancel</span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Error Toast */}
               {error && (
@@ -180,11 +290,11 @@ export const Consolidator: React.FC = () => {
                   {processing ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin" />
-                      <span>Consolidating Data...</span>
+                      <span>Consolidating {files.length} Files...</span>
                     </>
                   ) : (
                     <>
-                      <span>Consolidate Files</span>
+                      <span>Consolidate {files.length > 0 ? `${files.length} Files` : 'Files'}</span>
                       <div className="absolute inset-0 bg-white/20 translate-x-[-100%] hover:translate-x-[100%] transition-transform duration-1000 skew-x-12"></div>
                     </>
                   )}
@@ -193,55 +303,74 @@ export const Consolidator: React.FC = () => {
             </div>
           ) : (
             // Success State
-            <div className="p-12 text-center animate-in fade-in slide-in-from-bottom-8 duration-500 bg-gradient-to-b from-emerald-50/30 to-transparent">
-              <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-gradient-to-b from-emerald-100 to-white mb-6 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-100">
+            <div className="p-10 text-center animate-in fade-in slide-in-from-bottom-8 duration-500 bg-gradient-to-b from-emerald-50/30 to-transparent">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-b from-emerald-100 to-white mb-5 shadow-lg shadow-emerald-500/10 ring-1 ring-emerald-100">
                 <CheckCircle2 className="w-10 h-10 text-emerald-500 drop-shadow-sm" />
               </div>
-              <h3 className="text-2xl font-bold text-slate-800 mb-2">Consolidation Successful</h3>
-              <p className="text-slate-500 text-sm mb-10 max-w-xs mx-auto leading-relaxed">
-                Successfully merged <span className="font-bold text-indigo-600">{processedResult.fileCount} files</span> with <span className="font-bold text-indigo-600">{processedResult.rowCount} total records</span>.
+              <h3 className="text-2xl font-bold text-slate-800 mb-1">Consolidation Successful</h3>
+              <p className="text-slate-500 text-sm mb-6 max-w-sm mx-auto leading-relaxed">
+                Successfully merged <span className="font-bold text-indigo-600">{processedResult.fileCount} files</span> with <span className="font-bold text-indigo-600">{processedResult.rowCount.toLocaleString()} total records</span>.
               </p>
 
-              <div className="bg-white/80 rounded-2xl p-5 border border-slate-100 mb-10 shadow-sm flex items-center justify-between backdrop-blur-sm">
-                <div className="flex items-center gap-4">
-                  <div className="p-3 bg-indigo-50 rounded-xl border border-indigo-100">
-                    <FileText className="w-6 h-6 text-indigo-600" />
+              {/* Warnings if any */}
+              {processedResult.warnings && processedResult.warnings.length > 0 && (
+                <div className="mb-6 p-3 bg-amber-50 border border-amber-200 rounded-xl text-left text-xs text-amber-800">
+                  <div className="flex items-center gap-1.5 font-bold mb-1">
+                    <AlertCircle size={14} className="text-amber-600" />
+                    <span>File Notices ({processedResult.warnings.length}):</span>
+                  </div>
+                  <ul className="list-disc list-inside space-y-0.5 opacity-90">
+                    {processedResult.warnings.slice(0, 5).map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                    {processedResult.warnings.length > 5 && (
+                      <li>...and {processedResult.warnings.length - 5} more</li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              <div className="bg-white/80 rounded-2xl p-4 border border-slate-100 mb-6 shadow-sm flex items-center justify-between backdrop-blur-sm max-w-md mx-auto">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-indigo-50 rounded-xl border border-indigo-100">
+                    <FileText className="w-5 h-5 text-indigo-600" />
                   </div>
                   <div className="text-left">
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Master Report</p>
-                    <p className="text-sm font-bold text-slate-800 truncate max-w-[200px]">Consolidated_Report.xlsx</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Output File</p>
+                    <p className="text-xs font-bold text-slate-800 truncate max-w-[180px]">Consolidated_Report.xlsx</p>
                   </div>
                 </div>
                 <div className="text-right pl-4 border-l border-slate-100">
-                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Size</p>
-                   <p className="text-sm font-bold text-slate-800">~{(processedResult.data.length / 1024).toFixed(0)} KB</p>
+                   <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Total Size</p>
+                   <p className="text-xs font-bold text-slate-800">~{(processedResult.data.length / (1024 * 1024) > 1 ? `${(processedResult.data.length / (1024 * 1024)).toFixed(1)} MB` : `${(processedResult.data.length / 1024).toFixed(0)} KB`)}</p>
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-center gap-3 max-w-sm mx-auto">
                 <button 
                   onClick={handleDownload}
-                  className="group w-full flex items-center justify-center gap-2 py-4 bg-emerald-500 hover:bg-emerald-400 text-white rounded-xl font-bold shadow-xl shadow-emerald-500/20 transition-all hover:scale-[1.02]"
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-md transition-all hover:scale-[1.02]"
                 >
-                  <Download className="w-5 h-5 group-hover:translate-y-0.5 transition-transform" />
-                  Download Master Report
+                  <Download size={16} />
+                  <span>Download Master Report</span>
                 </button>
                 <button 
                   onClick={handleReset}
-                  className="w-full py-4 text-slate-500 hover:text-slate-700 font-semibold transition-colors text-sm hover:bg-slate-50 rounded-xl"
+                  className="px-4 py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-semibold text-sm transition-colors"
                 >
-                  Start New Consolidation
+                  Start New
                 </button>
               </div>
             </div>
           )}
         </div>
         
-        <p className="text-center mt-8 text-slate-400/60 text-[10px] font-medium tracking-wide uppercase">
-          Multi-File Merging Engine • Secure Local Processing
+        <p className="text-center mt-6 text-slate-400/60 text-[10px] font-medium tracking-wide uppercase">
+          Multi-File Merging Engine • High-Performance Processing Up to 200+ Huge Files
         </p>
 
       </div>
     </div>
   );
 };
+
