@@ -50,8 +50,9 @@ export interface GtsConsolidationResult {
 
 export interface GtsConsolidatorOptions {
   includeFileName?: boolean;
-  sortBy?: 'none' | 'Screening Date' | 'Partner' | 'Created By' | 'Document Number';
+  sortBy?: string;
   sortOrder?: 'asc' | 'desc';
+  targetHeaders?: string[];
   onProgress?: (progress: GtsProgressUpdate) => void;
   signal?: AbortSignal;
 }
@@ -146,13 +147,76 @@ const escapeCsvField = (val: any): string => {
   return `"${str}"`;
 };
 
+export interface HeaderMatcher {
+  target: string;
+  aliases: string[];
+}
+
 /**
- * Finds the header row in a 2D sheet array by scanning top rows for GTS keywords.
+ * Builds dynamic matchers for any custom list of target headers,
+ * inheriting standard GTS synonyms if the target header corresponds to or contains a GTS concept.
  */
-const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Record<GtsHeaderName, number> } => {
+export const buildDynamicHeaderMatchers = (targetHeaders: string[]): HeaderMatcher[] => {
+  const matchers: HeaderMatcher[] = [];
+
+  for (const hdr of targetHeaders) {
+    const normHdr = normalize(hdr);
+    if (!normHdr) continue;
+
+    const aliases = new Set<string>();
+    aliases.add(hdr);
+    aliases.add(normHdr);
+
+    // Check if target header matches or relates to any known GTS header
+    const knownMatcher = GTS_HEADER_MATCHERS.find(m => {
+      const normTarget = normalize(m.target);
+      if (normTarget === normHdr) return true;
+      if (m.aliases.some(a => normalize(a) === normHdr)) return true;
+      if (normHdr.length >= 4 && normTarget.length >= 4) {
+        if (normHdr.includes(normTarget) || normTarget.includes(normHdr)) return true;
+      }
+      return false;
+    });
+
+    if (knownMatcher) {
+      knownMatcher.aliases.forEach(a => aliases.add(a));
+    }
+
+    // Add space-separated variant
+    const cleanWord = hdr.replace(/[^a-zA-Z0-9 ]/g, " ").trim();
+    if (cleanWord) {
+      aliases.add(cleanWord);
+      aliases.add(normalize(cleanWord));
+    }
+
+    matchers.push({
+      target: hdr,
+      aliases: Array.from(aliases)
+    });
+  }
+
+  // Sort matchers: specific numbered variations like "Name 4", "Name 3", "Name 2", "BP Categ." before general ones
+  matchers.sort((a, b) => {
+    const aHasNum = /[0-9]/.test(a.target);
+    const bHasNum = /[0-9]/.test(b.target);
+    if (aHasNum && !bHasNum) return -1;
+    if (!aHasNum && bHasNum) return 1;
+    return b.target.length - a.target.length;
+  });
+
+  return matchers;
+};
+
+/**
+ * Finds the header row in a 2D sheet array by scanning top rows for keywords.
+ */
+const detectHeaderRow = (
+  rows: any[][],
+  matchers: HeaderMatcher[]
+): { headerRowIndex: number; columnMap: Record<string, number> } => {
   let bestRowIndex = 0;
   let bestMatchCount = -1;
-  let bestMap: Record<GtsHeaderName, number> = {} as any;
+  let bestMap: Record<string, number> = {};
 
   const maxScanRows = Math.min(35, rows.length);
 
@@ -160,9 +224,10 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
     const row = rows[r];
     if (!row || !Array.isArray(row) || row.length === 0) continue;
 
-    const currentMap: Partial<Record<GtsHeaderName, number>> = {};
+    const currentMap: Record<string, number> = {};
     let matchedCount = 0;
 
+    // Pass 1: exact normalized match
     for (let colIdx = 0; colIdx < row.length; colIdx++) {
       const cellVal = row[colIdx];
       if (cellVal === null || cellVal === undefined || cellVal === "") continue;
@@ -170,11 +235,9 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
       const normCell = normalize(cellVal);
       if (!normCell) continue;
 
-      // Find matching GTS target: prioritize exact normalized match
-      for (const matcher of GTS_HEADER_MATCHERS) {
+      for (const matcher of matchers) {
         if (currentMap[matcher.target] !== undefined) continue;
 
-        // Check exact match with target name or any alias
         const isExactMatch = matcher.aliases.some(alias => normalize(alias) === normCell);
 
         if (isExactMatch) {
@@ -185,7 +248,7 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
       }
     }
 
-    // Secondary pass on unmatched columns for longer descriptive headers
+    // Pass 2: secondary pass on unmatched columns for longer descriptive headers
     for (let colIdx = 0; colIdx < row.length; colIdx++) {
       const cellVal = row[colIdx];
       if (cellVal === null || cellVal === undefined || cellVal === "") continue;
@@ -195,12 +258,12 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
       // If this column was already assigned in pass 1, skip
       if (Object.values(currentMap).includes(colIdx)) continue;
 
-      for (const matcher of GTS_HEADER_MATCHERS) {
+      for (const matcher of matchers) {
         if (currentMap[matcher.target] !== undefined) continue;
 
         const isPrefixMatch = matcher.aliases.some(alias => {
           const normAlias = normalize(alias);
-          // Only allow prefix if alias is 4+ chars to prevent 'bp' or 'id' matching longer words
+          // Only allow prefix if alias is 4+ chars to prevent small acronyms matching longer words
           if (normAlias.length >= 4 && normCell.startsWith(normAlias)) {
             const remainder = normCell.slice(normAlias.length);
             if (!/^[0-9]/.test(remainder)) return true;
@@ -219,7 +282,7 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
     if (matchedCount > bestMatchCount) {
       bestMatchCount = matchedCount;
       bestRowIndex = r;
-      bestMap = currentMap as Record<GtsHeaderName, number>;
+      bestMap = currentMap;
     }
   }
 
@@ -230,7 +293,7 @@ const detectHeaderRow = (rows: any[][]): { headerRowIndex: number; columnMap: Re
     for (let colIdx = 0; colIdx < row.length; colIdx++) {
       const cellVal = row[colIdx];
       const normCell = normalize(cellVal);
-      for (const matcher of GTS_HEADER_MATCHERS) {
+      for (const matcher of matchers) {
         if (bestMap[matcher.target] === undefined && normCell.includes(normalize(matcher.target))) {
           bestMap[matcher.target] = colIdx;
         }
@@ -260,9 +323,16 @@ export const consolidateGtsFiles = async (
     includeFileName = true,
     sortBy = 'none',
     sortOrder = 'asc',
+    targetHeaders: customHeaders,
     onProgress,
     signal
   } = options || {};
+
+  const targetHeaders: string[] = (customHeaders && customHeaders.length > 0)
+    ? customHeaders.map(h => String(h).trim()).filter(Boolean)
+    : [...GTS_HEADERS];
+
+  const matchers = buildDynamicHeaderMatchers(targetHeaders);
 
   const totalFiles = files.length;
   const warnings: string[] = [];
@@ -270,8 +340,8 @@ export const consolidateGtsFiles = async (
 
   // Construct master output headers
   const outputHeaders: string[] = includeFileName 
-    ? ["File Name", ...GTS_HEADERS] 
-    : [...GTS_HEADERS];
+    ? ["File Name", ...targetHeaders] 
+    : [...targetHeaders];
 
   // All extracted rows in GTS column order
   const consolidatedRows: any[][] = [];
@@ -337,7 +407,7 @@ export const consolidateGtsFiles = async (
           fileName: file.name,
           rowCount: 0,
           matchedHeaders: [],
-          missingHeaders: [...GTS_HEADERS]
+          missingHeaders: [...targetHeaders]
         });
         continue;
       }
@@ -350,7 +420,7 @@ export const consolidateGtsFiles = async (
           fileName: file.name,
           rowCount: 0,
           matchedHeaders: [],
-          missingHeaders: [...GTS_HEADERS]
+          missingHeaders: [...targetHeaders]
         });
         continue;
       }
@@ -367,18 +437,18 @@ export const consolidateGtsFiles = async (
           fileName: file.name,
           rowCount: 0,
           matchedHeaders: [],
-          missingHeaders: [...GTS_HEADERS]
+          missingHeaders: [...targetHeaders]
         });
         continue;
       }
 
-      // Detect header row and column mapping
-      const { headerRowIndex, columnMap } = detectHeaderRow(rawData);
+      // Detect header row and column mapping with dynamic matchers
+      const { headerRowIndex, columnMap } = detectHeaderRow(rawData, matchers);
 
       const matched: string[] = [];
       const missing: string[] = [];
 
-      GTS_HEADERS.forEach(h => {
+      targetHeaders.forEach(h => {
         if (columnMap[h] !== undefined && columnMap[h] >= 0) {
           matched.push(h);
         } else {
@@ -403,9 +473,8 @@ export const consolidateGtsFiles = async (
           gtsRow.push(file.name);
         }
 
-        // Map strictly in GTS header order:
-        // Created By, Partner, LS Group, Screening Date, Name, Name 2, Name 3, Name 4, City, Country, BP Categ., Com. Ex., Document Number, Item, Partner Ro
-        for (const header of GTS_HEADERS) {
+        // Map strictly in configured target header order:
+        for (const header of targetHeaders) {
           const colIdx = columnMap[header];
           if (colIdx !== undefined && colIdx >= 0 && colIdx < sourceRow.length) {
             gtsRow.push(clampCell(sourceRow[colIdx]));
@@ -448,7 +517,7 @@ export const consolidateGtsFiles = async (
         fileName: file.name,
         rowCount: 0,
         matchedHeaders: [],
-        missingHeaders: [...GTS_HEADERS]
+        missingHeaders: [...targetHeaders]
       });
     }
   }

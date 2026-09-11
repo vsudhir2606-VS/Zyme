@@ -20,7 +20,13 @@ import {
   ChevronDown,
   ChevronUp,
   HelpCircle,
-  ArrowUpDown
+  ArrowUpDown,
+  Pencil,
+  Plus,
+  RotateCcw,
+  ArrowUp,
+  ArrowDown,
+  Columns
 } from 'lucide-react';
 import { consolidateFiles, ConsolidationResult, ConsolidatorProgressUpdate } from '../utils/consolidatorProcessor.ts';
 import { 
@@ -34,19 +40,40 @@ type ConsolidatorMode = 'standard' | 'gts';
 
 export const Consolidator: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
-  const [mode, setMode] = useState<ConsolidatorMode>('gts');
+  // Standard merge comes first as default mode
+  const [mode, setMode] = useState<ConsolidatorMode>('standard');
   const [processing, setProcessing] = useState(false);
-  const [activeProcessingType, setActiveProcessingType] = useState<ConsolidatorMode>('gts');
+  const [activeProcessingType, setActiveProcessingType] = useState<ConsolidatorMode>('standard');
   const [progress, setProgress] = useState<ConsolidatorProgressUpdate | GtsProgressUpdate | null>(null);
   const [processedResult, setProcessedResult] = useState<ConsolidationResult | null>(null);
   const [gtsResult, setGtsResult] = useState<GtsConsolidationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchFilter, setSearchFilter] = useState('');
 
+  // Target Column Configuration (defaults to 15 GTS headers, persisted locally)
+  const [columnNames, setColumnNames] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('zyme_gts_custom_headers');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(s => String(s).trim()).filter(Boolean);
+        }
+      }
+    } catch (e) {
+      console.error('Error loading custom headers:', e);
+    }
+    return [...GTS_HEADERS];
+  });
+
+  // Column Editing Modal State
+  const [isEditColumnsModalOpen, setIsEditColumnsModalOpen] = useState(false);
+  const [tempColumns, setTempColumns] = useState<string[]>([...columnNames]);
+  const [newColumnInput, setNewColumnInput] = useState('');
+
   // GTS Configuration options
   const [includeFileName, setIncludeFileName] = useState(true);
-  const [gtsSortBy, setGtsSortBy] = useState<'none' | 'Screening Date' | 'Partner' | 'Created By' | 'Document Number'>('none');
-  const [showHeadersModal, setShowHeadersModal] = useState(false);
+  const [gtsSortBy, setGtsSortBy] = useState<string>('none');
   const [showFileAudit, setShowFileAudit] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -75,6 +102,82 @@ export const Consolidator: React.FC = () => {
     setProcessing(false);
   };
 
+  // Column Editor Handlers
+  const handleOpenEditColumnsModal = () => {
+    setTempColumns([...columnNames]);
+    setNewColumnInput('');
+    setIsEditColumnsModalOpen(true);
+  };
+
+  const handleUpdateTempColumn = (index: number, val: string) => {
+    setTempColumns(prev => {
+      const copy = [...prev];
+      copy[index] = val;
+      return copy;
+    });
+  };
+
+  const handleMoveColumnUp = (index: number) => {
+    if (index <= 0) return;
+    setTempColumns(prev => {
+      const copy = [...prev];
+      const temp = copy[index];
+      copy[index] = copy[index - 1];
+      copy[index - 1] = temp;
+      return copy;
+    });
+  };
+
+  const handleMoveColumnDown = (index: number) => {
+    if (index >= tempColumns.length - 1) return;
+    setTempColumns(prev => {
+      const copy = [...prev];
+      const temp = copy[index];
+      copy[index] = copy[index + 1];
+      copy[index + 1] = temp;
+      return copy;
+    });
+  };
+
+  const handleRemoveTempColumn = (index: number) => {
+    setTempColumns(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAddTempColumn = () => {
+    const trimmed = newColumnInput.trim();
+    if (!trimmed) return;
+    setTempColumns(prev => [...prev, trimmed]);
+    setNewColumnInput('');
+  };
+
+  const handleResetToGtsDefaults = () => {
+    setTempColumns([...GTS_HEADERS]);
+  };
+
+  const handleSaveColumns = () => {
+    const cleaned = tempColumns.map(c => c.trim()).filter(Boolean);
+    if (cleaned.length === 0) {
+      setError("At least one column header is required.");
+      return;
+    }
+    setColumnNames(cleaned);
+    try {
+      localStorage.setItem('zyme_gts_custom_headers', JSON.stringify(cleaned));
+    } catch (e) {
+      console.error('Error persisting custom headers:', e);
+    }
+    setIsEditColumnsModalOpen(false);
+  };
+
+  const handleRestoreDefaultColumnsDirectly = () => {
+    setColumnNames([...GTS_HEADERS]);
+    try {
+      localStorage.removeItem('zyme_gts_custom_headers');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   // Standard Consolidation Handler
   const handleStandardConsolidate = async () => {
     if (files.length === 0) {
@@ -84,6 +187,7 @@ export const Consolidator: React.FC = () => {
 
     setProcessing(true);
     setActiveProcessingType('standard');
+    setMode('standard');
     setError(null);
     setProcessedResult(null);
     setGtsResult(null);
@@ -134,7 +238,7 @@ export const Consolidator: React.FC = () => {
     setProgress({
       currentFile: 0,
       totalFiles: files.length,
-      fileName: 'Scanning and mapping GTS headers...',
+      fileName: 'Scanning and mapping target columns...',
       totalRows: 0,
       percent: 0,
       stage: 'reading'
@@ -147,6 +251,7 @@ export const Consolidator: React.FC = () => {
       const result = await consolidateGtsFiles(files, {
         includeFileName,
         sortBy: gtsSortBy,
+        targetHeaders: columnNames,
         onProgress: (p) => setProgress(p),
         signal: controller.signal
       });
@@ -232,21 +337,31 @@ export const Consolidator: React.FC = () => {
             // Upload / Configuration State
             <div className="p-6 md:p-10 relative">
               
-              {/* Header with GTS Icon Badge */}
+              {/* Header with Quick Action Badges */}
               <div className="mb-6 text-center relative">
                 
-                {/* Quick-Access GTS Action Icon Badge at Top Right */}
+                {/* Quick-Access Action Badges at Top Right: Standard Merge First, GTS Next */}
                 <div className="absolute top-0 right-0 hidden sm:flex items-center gap-2">
+                  <button
+                    id="standard-header-icon-btn"
+                    onClick={handleStandardConsolidate}
+                    title="Standard Merge: Consolidate all sheets with automatic deduplication"
+                    className="group flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-700 border border-indigo-500/30 transition-all duration-200 shadow-xs hover:scale-105 active:scale-95"
+                  >
+                    <Layers size={14} className="text-indigo-600" />
+                    <span className="text-xs font-bold tracking-tight">Standard Merge</span>
+                  </button>
+
                   <button
                     id="gts-header-icon-btn"
                     onClick={handleGtsConsolidate}
-                    title="Click GTS icon to consolidate all files with sorted GTS headers"
-                    className="group flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 border border-amber-500/30 transition-all duration-200 shadow-sm hover:scale-105 active:scale-95"
+                    title="GTS Consolidate: Map columns to target sequence"
+                    className="group flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 border border-amber-500/30 transition-all duration-200 shadow-xs hover:scale-105 active:scale-95"
                   >
-                    <div className="flex items-center justify-center w-6 h-6 rounded-lg bg-amber-500 text-white font-black text-[10px] tracking-tight shadow-sm">
+                    <div className="flex items-center justify-center w-5 h-5 rounded-md bg-amber-500 text-white font-black text-[9px] tracking-tight shadow-xs">
                       GTS
                     </div>
-                    <span className="text-xs font-bold tracking-tight">Run GTS</span>
+                    <span className="text-xs font-bold tracking-tight">GTS Sort</span>
                   </button>
                 </div>
 
@@ -259,29 +374,11 @@ export const Consolidator: React.FC = () => {
                   Zyme Consolidator
                 </h3>
                 <p className="text-slate-500 text-xs md:text-sm max-w-lg mx-auto leading-relaxed">
-                  Consolidate multi-source spreadsheets with intelligent column matching or standard 2-sheet merging.
+                  Consolidate multi-source spreadsheets with standard 2-sheet merging or strict GTS header sorting.
                 </p>
 
-                {/* Mode Selector / Tabs */}
+                {/* Mode Selector / Tabs: Standard Merge First, GTS & Sorting Next */}
                 <div className="mt-5 inline-flex items-center p-1 bg-slate-100/80 rounded-2xl border border-slate-200/80 shadow-inner">
-                  <button
-                    id="mode-tab-gts"
-                    onClick={() => setMode('gts')}
-                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
-                      mode === 'gts'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <div className="flex items-center justify-center w-5 h-5 rounded-md bg-amber-500 text-white font-black text-[9px]">
-                      GTS
-                    </div>
-                    <span>GTS Header Consolidator</span>
-                    <span className="px-1.5 py-0.5 rounded-full text-[9px] bg-amber-100 text-amber-800 font-semibold">
-                      15 Headers
-                    </span>
-                  </button>
-
                   <button
                     id="mode-tab-standard"
                     onClick={() => setMode('standard')}
@@ -294,44 +391,114 @@ export const Consolidator: React.FC = () => {
                     <Layers size={14} className="text-indigo-600" />
                     <span>Standard Merge</span>
                   </button>
+
+                  <button
+                    id="mode-tab-gts"
+                    onClick={() => setMode('gts')}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 ${
+                      mode === 'gts'
+                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                        : 'text-slate-500 hover:text-slate-800'
+                    }`}
+                  >
+                    <div className="flex items-center justify-center w-5 h-5 rounded-md bg-amber-500 text-white font-black text-[9px]">
+                      GTS
+                    </div>
+                    <span>GTS & Column Sorting</span>
+                    <span className="px-1.5 py-0.5 rounded-full text-[9px] bg-amber-100 text-amber-800 font-semibold">
+                      {columnNames.length} Cols
+                    </span>
+                  </button>
                 </div>
               </div>
 
-              {/* GTS Specific Banner & Header Specs */}
-              {mode === 'gts' && (
-                <div className="mb-6 p-4 rounded-2xl bg-amber-50/70 border border-amber-200/70 text-slate-800 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
+              {/* Standard Merge Banner */}
+              {mode === 'standard' && (
+                <div className="mb-6 p-4 rounded-2xl bg-indigo-50/70 border border-indigo-100 text-slate-800 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2.5">
-                      <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-amber-500 text-white font-black text-xs shadow-sm">
-                        GTS
+                      <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-xs">
+                        <Layers size={16} />
                       </div>
                       <div>
-                        <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
-                          Standard GTS Column Sorting
+                        <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider">
+                          Standard Multi-File Consolidation
                         </h4>
-                        <p className="text-[11px] text-amber-800/90 leading-tight">
-                          Reads all files and automatically maps columns to the 15 GTS headers in exact sequence. Missing headers are left blank.
+                        <p className="text-[11px] text-indigo-900/80 leading-tight">
+                          Automatically merges uploaded files into unified Sheet 1 & Sheet 2 with smart column deduplication and sanitization.
                         </p>
                       </div>
                     </div>
 
                     <button
-                      onClick={() => setShowHeadersModal(!showHeadersModal)}
-                      className="text-[11px] font-bold text-amber-800 hover:text-amber-950 underline underline-offset-2 flex-shrink-0"
+                      onClick={() => setMode('gts')}
+                      className="hidden sm:inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 hover:text-indigo-900 underline underline-offset-2 flex-shrink-0"
                     >
-                      {showHeadersModal ? 'Hide Headers' : 'View 15 Headers'}
+                      Need column sorting? Switch to GTS
                     </button>
+                  </div>
+                </div>
+              )}
+
+              {/* GTS Specific Banner & Column Specs */}
+              {mode === 'gts' && (
+                <div className="mb-6 p-4 rounded-2xl bg-amber-50/70 border border-amber-200/70 text-slate-800 space-y-3">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex items-center justify-center w-8 h-8 rounded-xl bg-amber-500 text-white font-black text-xs shadow-xs">
+                        GTS
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                            GTS & Column Sorting
+                          </h4>
+                          <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-amber-200/80 text-amber-900 font-bold">
+                            {columnNames.length} Columns
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-amber-800/90 leading-tight">
+                          Reads all files and sorts data into your configured columns. Missing columns in files are left blank.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Column Configuration Action Buttons */}
+                    <div className="flex items-center gap-2 flex-shrink-0 self-end sm:self-center">
+                      <button
+                        id="edit-column-names-btn"
+                        onClick={handleOpenEditColumnsModal}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white hover:bg-amber-100 text-amber-950 border border-amber-300 text-xs font-bold shadow-xs transition-all hover:scale-105 active:scale-95"
+                      >
+                        <Pencil size={12} className="text-amber-700" />
+                        <span>Edit Column Names</span>
+                      </button>
+
+                      {JSON.stringify(columnNames) !== JSON.stringify(GTS_HEADERS) && (
+                        <button
+                          onClick={handleRestoreDefaultColumnsDirectly}
+                          title="Restore default 15 GTS headers"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-100/80 hover:bg-amber-200 text-amber-800 text-xs font-semibold transition-colors"
+                        >
+                          <RotateCcw size={11} />
+                          <span>Reset</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Header Chips */}
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {GTS_HEADERS.map((h, i) => (
+                  <div className="flex flex-wrap gap-1.5 pt-1 max-h-28 overflow-y-auto pr-1">
+                    {columnNames.map((h, i) => (
                       <span
-                        key={h}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-white/90 rounded-md border border-amber-200/80 text-[10px] font-mono text-slate-700 shadow-2xs"
+                        key={`${h}-${i}`}
+                        onClick={handleOpenEditColumnsModal}
+                        title="Click to edit column names"
+                        className="cursor-pointer group inline-flex items-center gap-1 px-2 py-0.5 bg-white/90 hover:bg-amber-100 rounded-md border border-amber-200/80 hover:border-amber-400 text-[10px] font-mono text-slate-700 transition-colors shadow-2xs"
                       >
                         <span className="text-amber-600 font-bold">{i + 1}.</span>
                         <span>{h}</span>
+                        <Pencil size={8} className="opacity-0 group-hover:opacity-100 text-amber-600 ml-0.5" />
                       </span>
                     ))}
                   </div>
@@ -353,14 +520,15 @@ export const Consolidator: React.FC = () => {
                       <span className="text-slate-600 font-medium">Sort records by:</span>
                       <select
                         value={gtsSortBy}
-                        onChange={(e) => setGtsSortBy(e.target.value as any)}
-                        className="bg-white border border-amber-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                        onChange={(e) => setGtsSortBy(e.target.value)}
+                        className="bg-white border border-amber-200 rounded-lg px-2 py-1 text-xs text-slate-700 focus:outline-none focus:ring-1 focus:ring-amber-400 max-w-[160px] truncate"
                       >
                         <option value="none">Original File Order</option>
-                        <option value="Screening Date">Screening Date</option>
-                        <option value="Partner">Partner</option>
-                        <option value="Created By">Created By</option>
-                        <option value="Document Number">Document Number</option>
+                        {columnNames.map((col) => (
+                          <option key={col} value={col}>
+                            {col}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -535,19 +703,54 @@ export const Consolidator: React.FC = () => {
                 </div>
               )}
 
-              {/* ACTION BUTTONS: Primary GTS Icon Button & Standard Button */}
+              {/* ACTION BUTTONS: Standard Merge First, GTS & Sorting Next */}
               <div className="mt-8 flex flex-col sm:flex-row items-center gap-3">
                 
-                {/* PRIMARY GTS ACTION BUTTON */}
+                {/* 1. PRIMARY STANDARD MERGE ACTION BUTTON (FIRST) */}
+                <button 
+                  id="standard-consolidate-action-btn"
+                  onClick={handleStandardConsolidate}
+                  disabled={processing}
+                  className={`
+                    flex-1 w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-bold shadow-xl transition-all duration-300 relative overflow-hidden group
+                    ${files.length === 0
+                      ? 'bg-indigo-600/80 hover:bg-indigo-600 text-white shadow-indigo-500/10'
+                      : 'bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white hover:scale-[1.02] shadow-indigo-500/25 active:scale-[0.99]'
+                    }
+                  `}
+                >
+                  <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-white/20 text-white font-bold text-xs shadow-inner">
+                    <Layers size={16} />
+                  </div>
+                  
+                  {processing && activeProcessingType === 'standard' ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin text-white" />
+                      <span>Standard Merging {files.length} Files...</span>
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-start text-left leading-tight">
+                      <span className="text-sm font-extrabold text-white">
+                        {files.length > 0 ? `Standard Merge (${files.length} Files)` : 'Standard Merge'}
+                      </span>
+                      <span className="text-[10px] font-medium text-indigo-100 opacity-90">
+                        Consolidate all sheets with smart deduplication
+                      </span>
+                    </div>
+                  )}
+                  <div className="absolute inset-0 bg-white/20 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000 skew-x-12"></div>
+                </button>
+
+                {/* 2. GTS & COLUMN SORTING ACTION BUTTON (NEXT) */}
                 <button 
                   id="gts-consolidate-action-btn"
                   onClick={handleGtsConsolidate}
                   disabled={processing}
                   className={`
-                    flex-1 w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-bold shadow-xl transition-all duration-300 relative overflow-hidden group
+                    sm:w-auto w-full flex items-center justify-center gap-3 px-6 py-4 rounded-2xl font-bold shadow-md transition-all duration-300 relative overflow-hidden group border
                     ${files.length === 0
-                      ? 'bg-amber-500/80 hover:bg-amber-500 text-slate-950 shadow-amber-500/10'
-                      : 'bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-slate-950 hover:scale-[1.02] shadow-amber-500/20 active:scale-[0.99]'
+                      ? 'bg-amber-500/90 hover:bg-amber-500 text-slate-950 border-amber-400/80 shadow-amber-500/10'
+                      : 'bg-gradient-to-r from-amber-500 via-amber-400 to-yellow-400 hover:from-amber-400 hover:to-yellow-300 text-slate-950 border-amber-400 hover:scale-[1.02] shadow-amber-500/20 active:scale-[0.99]'
                     }
                   `}
                 >
@@ -558,36 +761,19 @@ export const Consolidator: React.FC = () => {
                   {processing && activeProcessingType === 'gts' ? (
                     <>
                       <Loader2 className="w-5 h-5 animate-spin text-slate-950" />
-                      <span>Sorting & Consolidating {files.length} Files...</span>
+                      <span>Sorting {columnNames.length} Cols...</span>
                     </>
                   ) : (
                     <div className="flex flex-col items-start text-left leading-tight">
-                      <span className="text-sm font-extrabold text-slate-950">
-                        {files.length > 0 ? `GTS Consolidate (${files.length} Files)` : 'GTS Consolidate'}
+                      <span className="text-xs font-extrabold text-slate-950">
+                        GTS Consolidate & Sort
                       </span>
                       <span className="text-[10px] font-semibold text-slate-800 opacity-90">
-                        Sort columns by 15 GTS headers
+                        {columnNames.length} target columns
                       </span>
                     </div>
                   )}
                   <div className="absolute inset-0 bg-white/25 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000 skew-x-12"></div>
-                </button>
-
-                {/* STANDARD CONSOLIDATE BUTTON */}
-                <button 
-                  id="standard-consolidate-action-btn"
-                  onClick={handleStandardConsolidate}
-                  disabled={processing}
-                  className={`
-                    sm:w-auto w-full flex items-center justify-center gap-2 px-6 py-4 rounded-2xl font-bold transition-all duration-300 border
-                    ${processing && activeProcessingType === 'standard'
-                      ? 'bg-indigo-600 text-white border-transparent'
-                      : 'bg-slate-100/90 hover:bg-slate-200 text-slate-700 border-slate-200/80 hover:text-slate-900 active:scale-[0.99]'
-                    }
-                  `}
-                >
-                  <Layers size={16} className="text-indigo-600" />
-                  <span className="text-xs font-bold">Standard Merge</span>
                 </button>
               </div>
 
@@ -608,7 +794,7 @@ export const Consolidator: React.FC = () => {
               </h3>
               
               <p className="text-slate-500 text-xs md:text-sm mb-6 max-w-md mx-auto leading-relaxed">
-                Extracted and sorted columns across <span className="font-bold text-amber-700">{gtsResult.fileCount} files</span> into 15 GTS headers, generating <span className="font-bold text-amber-700">{gtsResult.rowCount.toLocaleString()} consolidated records</span>.
+                Extracted and sorted columns across <span className="font-bold text-amber-700">{gtsResult.fileCount} files</span> into <span className="font-bold text-amber-700">{columnNames.length} configured headers</span>, generating <span className="font-bold text-amber-700">{gtsResult.rowCount.toLocaleString()} consolidated records</span>.
               </p>
 
               {/* Warnings / Notices */}
@@ -637,8 +823,8 @@ export const Consolidator: React.FC = () => {
                   <p className="text-base font-bold text-slate-800">{gtsResult.fileCount}</p>
                 </div>
                 <div className="p-3 bg-white/90 rounded-xl border border-slate-100 shadow-xs col-span-2 sm:col-span-1">
-                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">GTS Headers</p>
-                  <p className="text-base font-bold text-amber-600">15 Columns</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Target Columns</p>
+                  <p className="text-base font-bold text-amber-600">{columnNames.length} Columns</p>
                 </div>
               </div>
 
@@ -702,7 +888,7 @@ export const Consolidator: React.FC = () => {
                             <span className="text-amber-700">{fa.rowCount} rows</span>
                           </div>
                           <div className="text-[10px] text-slate-500 mt-0.5">
-                            <span className="text-emerald-600 font-semibold">Matched:</span> {fa.matchedHeaders.length}/15 headers
+                            <span className="text-emerald-600 font-semibold">Matched:</span> {fa.matchedHeaders.length}/{columnNames.length} headers
                             {fa.missingHeaders.length > 0 && (
                               <span className="ml-2 text-slate-400">
                                 (Missing: {fa.missingHeaders.join(', ')})
@@ -810,10 +996,179 @@ export const Consolidator: React.FC = () => {
         </div>
         
         <p className="text-center mt-6 text-slate-400/60 text-[10px] font-medium tracking-wide uppercase">
-          Multi-File Merging Engine • GTS 15-Header Sorting & Legacy BIFF8 Support
+          Multi-File Merging Engine • Standard Consolidation & Dynamic GTS Column Sorting
         </p>
 
       </div>
+
+      {/* EDIT TARGET COLUMN NAMES MODAL */}
+      {isEditColumnsModalOpen && (
+        <div 
+          id="edit-columns-modal" 
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsEditColumnsModalOpen(false);
+          }}
+        >
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            
+            {/* Modal Header */}
+            <div className="p-5 md:p-6 border-b border-slate-100 bg-slate-50/80 flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500 text-white rounded-2xl shadow-xs">
+                  <Columns size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">
+                    Edit Column Names & Sequence
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Customize headers, rename columns, add new fields, or reorder column sequence according to requirements. Missing headers in files will be left blank.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setIsEditColumnsModalOpen(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors flex-shrink-0"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Add New Column Toolbar & Quick Presets */}
+            <div className="p-4 bg-amber-50/50 border-b border-amber-100/80 flex flex-wrap items-center justify-between gap-3">
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleAddTempColumn();
+                }}
+                className="flex items-center gap-2 flex-1 min-w-[260px]"
+              >
+                <input
+                  type="text"
+                  value={newColumnInput}
+                  onChange={(e) => setNewColumnInput(e.target.value)}
+                  placeholder="Type new column name and click Add..."
+                  className="flex-1 px-3 py-2 text-xs bg-white border border-amber-200 rounded-xl text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+                <button
+                  type="submit"
+                  disabled={!newColumnInput.trim()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs shadow-xs transition-colors flex-shrink-0"
+                >
+                  <Plus size={14} />
+                  <span>Add Column</span>
+                </button>
+              </form>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetToGtsDefaults}
+                  title="Reset columns back to standard 15 GTS headers"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-amber-800 bg-white hover:bg-amber-100 border border-amber-200 rounded-xl transition-colors shadow-2xs"
+                >
+                  <RotateCcw size={12} />
+                  <span>Reset 15 GTS Defaults</span>
+                </button>
+
+                <span className="px-2.5 py-1 bg-amber-100 text-amber-900 font-bold text-xs rounded-xl">
+                  {tempColumns.length} Columns
+                </span>
+              </div>
+            </div>
+
+            {/* Columns List */}
+            <div className="p-4 md:p-6 flex-1 overflow-y-auto space-y-2.5 max-h-[50vh] scrollbar-thin scrollbar-thumb-slate-300">
+              {tempColumns.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">
+                  No columns defined. Click "Reset 15 GTS Defaults" or add custom columns above.
+                </div>
+              ) : (
+                tempColumns.map((col, idx) => (
+                  <div 
+                    key={idx}
+                    className="flex items-center gap-2.5 p-2 bg-slate-50 hover:bg-white rounded-xl border border-slate-200/80 shadow-2xs transition-colors group"
+                  >
+                    {/* Sequence Badge */}
+                    <span className="w-8 h-8 flex-shrink-0 flex items-center justify-center font-mono font-bold text-xs bg-slate-200 text-slate-700 rounded-lg">
+                      #{idx + 1}
+                    </span>
+
+                    {/* Editable Input */}
+                    <input
+                      type="text"
+                      value={col}
+                      onChange={(e) => handleUpdateTempColumn(idx, e.target.value)}
+                      placeholder={`Column #${idx + 1} name`}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-amber-400 focus:border-amber-400"
+                    />
+
+                    {/* Order buttons */}
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleMoveColumnUp(idx)}
+                        disabled={idx === 0}
+                        title="Move column earlier in output"
+                        className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none hover:bg-slate-200 rounded-md transition-colors"
+                      >
+                        <ArrowUp size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMoveColumnDown(idx)}
+                        disabled={idx === tempColumns.length - 1}
+                        title="Move column later in output"
+                        className="p-1.5 text-slate-400 hover:text-slate-700 disabled:opacity-30 disabled:pointer-events-none hover:bg-slate-200 rounded-md transition-colors"
+                      >
+                        <ArrowDown size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTempColumn(idx)}
+                        disabled={tempColumns.length <= 1}
+                        title="Delete column"
+                        className="p-1.5 text-slate-400 hover:text-red-500 disabled:opacity-30 disabled:pointer-events-none hover:bg-red-50 rounded-md transition-colors ml-1"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 md:p-5 border-t border-slate-100 bg-slate-50/80 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-slate-500">
+                Changes will apply to subsequent GTS consolidations and exports.
+              </p>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsEditColumnsModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition-colors"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSaveColumns}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-bold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-xl shadow-xs transition-colors hover:scale-105 active:scale-95"
+                >
+                  <Check size={14} />
+                  <span>Save & Apply Changes</span>
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 };
