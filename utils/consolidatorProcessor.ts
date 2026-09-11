@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import './cptableSetup.ts';
 
 export interface ConsolidatorProgressUpdate {
   currentFile: number;
@@ -81,24 +82,50 @@ export const consolidateFiles = async (
 
     try {
       const data = await file.arrayBuffer();
-      const tempWb = XLSX.read(new Uint8Array(data), {
-        type: 'array',
-        dense: true,
-        cellDates: true,
-        cellNF: false,
-        cellText: false,
-        cellHTML: false,
-        cellFormula: false
-      });
+      const uint8 = new Uint8Array(data);
+
+      let tempWb: XLSX.WorkBook | null = null;
+
+      try {
+        tempWb = XLSX.read(uint8, {
+          type: 'array',
+          dense: true,
+          cellDates: true,
+          cellNF: false,
+          cellText: false,
+          cellHTML: false,
+          cellFormula: false
+        });
+      } catch (_denseErr) {
+        try {
+          tempWb = XLSX.read(uint8, {
+            type: 'array',
+            cellDates: true
+          });
+        } catch (_arrayErr) {
+          try {
+            const text = await file.text();
+            tempWb = XLSX.read(text, { type: 'string' });
+          } catch (textErr: any) {
+            throw new Error(`Unable to read spreadsheet: ${textErr.message || 'Unsupported format'}`);
+          }
+        }
+      }
       
-      if (!tempWb.SheetNames.length) {
+      if (!tempWb || !tempWb.SheetNames || !tempWb.SheetNames.length) {
         warnings.push(`File "${file.name}" contains no sheets and was skipped.`);
         continue;
       }
 
       const sheetName = tempWb.SheetNames[0];
       const worksheet = tempWb.Sheets[sheetName];
-      const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+      if (!worksheet) {
+        warnings.push(`File "${file.name}" sheet "${sheetName}" was empty or could not be parsed.`);
+        continue;
+      }
+
+      const xlsxUtils = XLSX.utils || (XLSX as any).default?.utils;
+      const jsonData: any[][] = xlsxUtils.sheet_to_json(worksheet, {
         header: 1,
         defval: "",
         blankrows: false

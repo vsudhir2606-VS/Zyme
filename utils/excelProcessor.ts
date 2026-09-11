@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import './cptableSetup.ts';
 
 export interface ProcessConfig {
   highRiskKeywords: string[];

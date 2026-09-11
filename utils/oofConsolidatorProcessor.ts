@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import './cptableSetup.ts';
 
 export interface ProgressUpdate {
   currentFile: number;
@@ -139,26 +140,53 @@ export const consolidateOofFiles = async (
 
     try {
       const buffer = await file.arrayBuffer();
+      const uint8 = new Uint8Array(buffer);
 
-      // Read with memory-efficient dense mode
-      const tempWb = XLSX.read(new Uint8Array(buffer), {
-        type: 'array',
-        dense: true,
-        cellDates: true,
-        cellNF: false,
-        cellText: false,
-        cellHTML: false,
-        cellFormula: false
-      });
+      let tempWb: XLSX.WorkBook | null = null;
 
-      if (!tempWb.SheetNames.length) {
+      // Strategy 1: Fast memory-efficient dense read
+      try {
+        tempWb = XLSX.read(uint8, {
+          type: 'array',
+          dense: true,
+          cellDates: true,
+          cellNF: false,
+          cellText: false,
+          cellHTML: false,
+          cellFormula: false
+        });
+      } catch (_denseErr) {
+        // Strategy 2: Fallback to standard array read (for complex legacy BIFF8 XLS)
+        try {
+          tempWb = XLSX.read(uint8, {
+            type: 'array',
+            cellDates: true
+          });
+        } catch (_arrayErr) {
+          // Strategy 3: Text/string read (often needed when ERP/legacy systems export HTML tables or XML SpreadsheetML with .xls extension)
+          try {
+            const text = await file.text();
+            tempWb = XLSX.read(text, { type: 'string' });
+          } catch (textErr: any) {
+            throw new Error(`Unable to read spreadsheet: ${textErr.message || 'Corrupted or unsupported format'}`);
+          }
+        }
+      }
+
+      if (!tempWb || !tempWb.SheetNames || !tempWb.SheetNames.length) {
         warnings.push(`File "${file.name}" has no readable sheets and was skipped.`);
         continue;
       }
 
       const firstSheetName = tempWb.SheetNames[0];
       const worksheet = tempWb.Sheets[firstSheetName];
-      const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+      if (!worksheet) {
+        warnings.push(`File "${file.name}" sheet "${firstSheetName}" was empty or could not be loaded.`);
+        continue;
+      }
+
+      const xlsxUtils = XLSX.utils || (XLSX as any).default?.utils;
+      const jsonData: any[][] = xlsxUtils.sheet_to_json(worksheet, {
         header: 1,
         defval: "",
         blankrows: false

@@ -1,4 +1,5 @@
 import { read, utils } from 'xlsx';
+import './cptableSetup.ts';
 
 export interface InventoryData {
   region: string;
