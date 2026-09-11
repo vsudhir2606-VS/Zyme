@@ -77,13 +77,25 @@ export const OofConsolidator: React.FC = () => {
     }
   };
 
-  const handleDownload = () => {
-    if (!processedResult) return;
+  const handleDownloadExcel = () => {
+    if (!processedResult || !processedResult.data) return;
     const blob = new Blob([processedResult.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `Off_Consolidated_Report_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  const handleDownloadCsv = () => {
+    if (!processedResult || !processedResult.csvBlob) return;
+    const url = window.URL.createObjectURL(processedResult.csvBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Off_Consolidated_Report_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     window.URL.revokeObjectURL(url);
@@ -399,12 +411,27 @@ export const OofConsolidator: React.FC = () => {
                   </button>
                 </div>
                 <div className="flex items-center gap-2">
+                  {!processedResult.isCsvOnly && processedResult.data && (
+                    <button 
+                      onClick={handleDownloadExcel}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-md transition-all hover:scale-[1.02]"
+                      title="Download as Microsoft Excel (.xlsx)"
+                    >
+                      <Download size={16} />
+                      <span>Download Excel (.xlsx)</span>
+                    </button>
+                  )}
                   <button 
-                    onClick={handleDownload}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-sm shadow-md transition-all hover:scale-[1.02]"
+                    onClick={handleDownloadCsv}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm shadow-md transition-all hover:scale-[1.02] ${
+                      processedResult.isCsvOnly
+                        ? 'bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-400/40'
+                        : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                    }`}
+                    title="Download as Universal CSV (Opens in Excel, zero row limit)"
                   >
                     <Download size={16} />
-                    <span>Download Report</span>
+                    <span>Download CSV (.csv)</span>
                   </button>
                   <button 
                     onClick={handleReset}

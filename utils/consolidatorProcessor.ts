@@ -183,7 +183,8 @@ export const consolidateFiles = async (
   const buffer = XLSX.write(workbook, {
     bookType: 'xlsx',
     type: 'array',
-    compression: true
+    compression: false,
+    bookSST: false
   });
 
   if (onProgress) {

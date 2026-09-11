@@ -32,6 +32,36 @@ const removeCommonKeywords = (s: string): string => {
  * Calculates a simple similarity score between two strings (0 to 100).
  * Uses a basic Levenshtein-based similarity.
  */
+const fastEditDistance = (a: string, b: string): number => {
+  // Cap string lengths to 200 chars to prevent extreme allocations
+  const s1 = a.length > 200 ? a.slice(0, 200) : a;
+  const s2 = b.length > 200 ? b.slice(0, 200) : b;
+  if (s1 === s2) return 0;
+  if (!s1.length) return s2.length;
+  if (!s2.length) return s1.length;
+
+  let prev = new Int32Array(s2.length + 1);
+  let curr = new Int32Array(s2.length + 1);
+  for (let j = 0; j <= s2.length; j++) prev[j] = j;
+
+  for (let i = 1; i <= s1.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= s2.length; j++) {
+      if (s1[i - 1] === s2[j - 1]) {
+        curr[j] = prev[j - 1];
+      } else {
+        curr[j] = Math.min(prev[j - 1] + 1, curr[j - 1] + 1, prev[j] + 1);
+      }
+    }
+    prev.set(curr);
+  }
+  return prev[s2.length];
+};
+
+/**
+ * Calculates a simple similarity score between two strings (0 to 100).
+ * Uses a basic Levenshtein-based similarity.
+ */
 const calculateSimilarity = (s1: string, s2: string): number => {
   if (!s1 || !s2) return 0;
   
@@ -40,31 +70,7 @@ const calculateSimilarity = (s1: string, s2: string): number => {
 
   if (kw1 === kw2) return 100;
 
-  const editDistance = (a: string, b: string): number => {
-    const matrix = Array.from({ length: a.length + 1 }, () => 
-      Array.from({ length: b.length + 1 }, () => 0)
-    );
-
-    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        if (a[i - 1] === b[j - 1]) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j - 1] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
-          );
-        }
-      }
-    }
-    return matrix[a.length][b.length];
-  };
-
-  const distance = editDistance(kw1, kw2);
+  const distance = fastEditDistance(kw1, kw2);
   const maxLength = Math.max(kw1.length, kw2.length);
   return Math.round(((maxLength - distance) / maxLength) * 100);
 };
@@ -85,31 +91,7 @@ const calculateLetterOnlySimilarity = (s1: string, s2: string): number => {
   if (!clean1 || !clean2) return 0;
   if (clean1 === clean2) return 100;
 
-  const editDistance = (a: string, b: string): number => {
-    const matrix = Array.from({ length: a.length + 1 }, () => 
-      Array.from({ length: b.length + 1 }, () => 0)
-    );
-
-    for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
-    for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
-    for (let i = 1; i <= a.length; i++) {
-      for (let j = 1; j <= b.length; j++) {
-        if (a[i - 1] === b[j - 1]) {
-          matrix[i][j] = matrix[i - 1][j - 1];
-        } else {
-          matrix[i][j] = Math.min(
-            matrix[i - 1][j - 1] + 1,
-            matrix[i][j - 1] + 1,
-            matrix[i - 1][j] + 1
-          );
-        }
-      }
-    }
-    return matrix[a.length][b.length];
-  };
-
-  const distance = editDistance(clean1, clean2);
+  const distance = fastEditDistance(clean1, clean2);
   const maxLength = Math.max(clean1.length, clean2.length);
   return Math.round(((maxLength - distance) / maxLength) * 100);
 };

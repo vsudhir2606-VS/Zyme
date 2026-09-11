@@ -10,11 +10,13 @@ export interface ProgressUpdate {
 }
 
 export interface OofConsolidationResult {
-  data: Uint8Array;
+  data: Uint8Array | null;
+  csvBlob: Blob;
   fileCount: number;
   rowCount: number;
   previewRows: any[][];
   warnings?: string[];
+  isCsvOnly?: boolean;
 }
 
 export interface ConsolidateOptions {
@@ -25,7 +27,9 @@ export interface ConsolidateOptions {
   includeMasterHeader?: boolean;
 }
 
-const MAX_ROWS_PER_SHEET = 200000; // Optimal chunk size for speed and zero memory pressure
+// Target max cells per worksheet to stay well within browser V8 array allocation limits
+const TARGET_MAX_CELLS_PER_SHEET = 350000;
+const ABSOLUTE_MAX_ROWS_PER_SHEET = 50000;
 
 const clampCell = (val: any): any => {
   if (val === undefined || val === null) return "";
@@ -40,10 +44,23 @@ const clampCell = (val: any): any => {
 };
 
 /**
- * Consolidates multiple Excel/CSV files (even up to 200+ huge files) into a single XLSX file.
+ * Escapes a cell value for clean RFC-4180 compliant CSV output
+ */
+const escapeCsvCell = (val: any): string => {
+  if (val === undefined || val === null) return '""';
+  if (val instanceof Date) return `"${val.toISOString()}"`;
+  const str = String(val);
+  if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return `"${str}"`;
+};
+
+/**
+ * Consolidates multiple Excel/CSV files (even up to 200+ huge files) into a master report.
  * The source file name is prepended to Column A for every row.
- * Uses SheetJS dense mode and event-loop yielding to prevent "Too many properties to enumerate"
- * and browser memory crashes.
+ * Uses SheetJS dense mode, safe sheet partitioning, and uncompressed packaging
+ * to eliminate "Invalid array length" and "Too many properties to enumerate" errors.
  */
 export const consolidateOofFiles = async (
   files: File[],
@@ -57,7 +74,7 @@ export const consolidateOofFiles = async (
     onProgress, 
     signal, 
     removeBlankColumnB = true, 
-    removeDuplicateHeaders = true,
+    removeDuplicateHeaders = true, 
     includeMasterHeader = true 
   } = options || {};
 
@@ -68,9 +85,21 @@ export const consolidateOofFiles = async (
   // SheetJS workbook
   const workbook = XLSX.utils.book_new();
 
-  // Accumulate rows into sheet chunks to prevent exceeding Excel sheet row limit
+  // CSV accumulator chunks (each chunk holds ~2500 lines to avoid massive strings)
+  const csvChunks: string[] = [];
+  let currentCsvLines: string[] = [];
+
+  const flushCsvLines = () => {
+    if (currentCsvLines.length > 0) {
+      csvChunks.push(currentCsvLines.join("\r\n") + "\r\n");
+      currentCsvLines = [];
+    }
+  };
+
+  // Dynamic sheet row chunking
   let currentSheetRows: any[][] = [];
   let sheetIndex = 1;
+  let estimatedColumns = 10;
 
   const flushCurrentSheet = () => {
     if (currentSheetRows.length === 0) return;
@@ -139,14 +168,22 @@ export const consolidateOofFiles = async (
         continue;
       }
 
-      // Check if Column B is blank or candidate for removal
-      // If removeBlankColumnB is enabled, we check if index 1 is blank across rows
+      // Check if Column B is truly blank across sample rows
       const hasColumnB = jsonData.some(r => r && r.length > 1);
-      const isColBActuallyBlank = hasColumnB && jsonData.slice(0, 30).every(
+      const isColBActuallyBlank = hasColumnB && jsonData.slice(0, 50).every(
         r => !r || r.length <= 1 || r[1] === "" || r[1] === null || r[1] === undefined || String(r[1]).trim() === ""
       );
 
-      const shouldDropColB = removeBlankColumnB && (isColBActuallyBlank || hasColumnB);
+      const shouldDropColB = removeBlankColumnB && isColBActuallyBlank;
+
+      // Update estimated columns to dynamically calculate safe rows per sheet
+      if (jsonData[0] && jsonData[0].length > 0) {
+        estimatedColumns = Math.max(estimatedColumns, jsonData[0].length);
+      }
+      const maxRowsForThisSheet = Math.max(
+        10000,
+        Math.min(ABSOLUTE_MAX_ROWS_PER_SHEET, Math.floor(TARGET_MAX_CELLS_PER_SHEET / Math.max(1, estimatedColumns)))
+      );
 
       // Process rows for this file
       for (let r = 0; r < jsonData.length; r++) {
@@ -157,7 +194,7 @@ export const consolidateOofFiles = async (
         const hasContent = rawRow.some(cell => cell !== "" && cell !== null && cell !== undefined);
         if (!hasContent) continue;
 
-        // Build clean row (filtering Column B if requested/blank)
+        // Build clean row (filtering Column B if requested and truly blank)
         const cleanRow: any[] = [file.name];
         for (let c = 0; c < rawRow.length; c++) {
           if (shouldDropColB && c === 1) {
@@ -167,7 +204,7 @@ export const consolidateOofFiles = async (
           cleanRow.push(clampCell(rawRow[c]));
         }
 
-        // Row signature to detect repeated headers
+        // Row signature to detect repeated headers across files
         const rowSig = rawRow.map(c => String(c ?? '').trim().toLowerCase()).join('|');
 
         // If this is row 0 of the first file, save header signature
@@ -184,21 +221,28 @@ export const consolidateOofFiles = async (
           }
         }
 
+        // Add to active sheet
         currentSheetRows.push(cleanRow);
         totalRowCount++;
+
+        // Add to CSV stream lines
+        currentCsvLines.push(cleanRow.map(escapeCsvCell).join(','));
+        if (currentCsvLines.length >= 2500) {
+          flushCsvLines();
+        }
 
         // Store up to 100 sample rows for instant preview
         if (previewRows.length < 100) {
           previewRows.push(cleanRow);
         }
 
-        // If current sheet reaches limit, flush to workbook and start next sheet
-        if (currentSheetRows.length >= MAX_ROWS_PER_SHEET) {
+        // If current sheet reaches safe limit, flush to workbook and start next sheet
+        if (currentSheetRows.length >= maxRowsForThisSheet) {
           flushCurrentSheet();
         }
 
-        // Yield occasionally on massive individual files (every 15,000 rows)
-        if (r > 0 && r % 15000 === 0) {
+        // Yield occasionally on massive individual files (every 10,000 rows)
+        if (r > 0 && r % 10000 === 0) {
           if (onProgress) {
             onProgress({
               currentFile: fileIdx + 1,
@@ -218,14 +262,14 @@ export const consolidateOofFiles = async (
     }
   }
 
-  // Flush any remaining rows
+  // Flush any remaining rows to workbook and CSV
   if (currentSheetRows.length > 0) {
     flushCurrentSheet();
   } else if (workbook.SheetNames.length === 0) {
-    // If all files were empty, create at least an empty sheet
     const emptyWs = (XLSX.utils.aoa_to_sheet as any)([["File Name", "No Data Found"]], { dense: true });
     XLSX.utils.book_append_sheet(workbook, emptyWs, 'Off Consolidated');
   }
+  flushCsvLines();
 
   if (signal?.aborted) {
     throw new Error("Consolidation was cancelled by the user.");
@@ -236,22 +280,40 @@ export const consolidateOofFiles = async (
     onProgress({
       currentFile: totalFiles,
       totalFiles,
-      fileName: 'Finalizing Excel file...',
+      fileName: 'Packaging final reports...',
       totalRows: totalRowCount,
       percent: 92,
       stage: 'generating'
     });
   }
 
-  // Yield to allow UI update before binary compression
-  await new Promise(resolve => setTimeout(resolve, 15));
+  // Build the CSV Blob (instant, memory-light, and handles millions of rows)
+  const csvBlob = new Blob(csvChunks, { type: 'text/csv;charset=utf-8;' });
 
-  // Generate output XLSX buffer using fast SheetJS binary packaging
-  const outBuffer = XLSX.write(workbook, {
-    bookType: 'xlsx',
-    type: 'array',
-    compression: true
-  });
+  // Yield to allow UI update before binary packaging
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  let outData: Uint8Array | null = null;
+  let isCsvOnly = false;
+
+  try {
+    // Generate output XLSX buffer using compression: false
+    // Note: compression: false writes directly in STORE mode, avoiding SheetJS's internal
+    // pure-JS deflate realloc buffer doubling that causes "Invalid array length".
+    const outBuffer = XLSX.write(workbook, {
+      bookType: 'xlsx',
+      type: 'array',
+      compression: false,
+      bookSST: false
+    });
+    outData = new Uint8Array(outBuffer);
+  } catch (err: any) {
+    console.warn("XLSX packaging hit browser memory ceiling; CSV fallback is ready:", err);
+    warnings.push(
+      "The dataset was exceptionally large. While XLSX binary generation hit browser memory limits, your complete consolidated dataset is safely preserved and available via the CSV download button."
+    );
+    isCsvOnly = true;
+  }
 
   if (onProgress) {
     onProgress({
@@ -265,11 +327,12 @@ export const consolidateOofFiles = async (
   }
 
   return {
-    data: new Uint8Array(outBuffer),
+    data: outData,
+    csvBlob,
     fileCount: files.length,
     rowCount: totalRowCount,
     previewRows,
-    warnings: warnings.length > 0 ? warnings : undefined
+    warnings: warnings.length > 0 ? warnings : undefined,
+    isCsvOnly
   };
 };
-
