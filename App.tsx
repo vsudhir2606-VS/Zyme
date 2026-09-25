@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive } from 'lucide-react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
+import { LiveProcessing } from './components/LiveProcessing.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
 import { OofConsolidator } from './components/OofConsolidator.tsx';
 import { DataSheet } from './components/DataSheet.tsx';
@@ -18,13 +19,17 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
+type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
   const [referenceData, setReferenceData] = useState<Record<string, string[]> | null>(null);
   const [referenceFileName, setReferenceFileName] = useState<string | null>(null);
   const [isDbLoading, setIsDbLoading] = useState(true);
+
+  // Cross-tool handoff to Live Processing
+  const [liveProcessingRows, setLiveProcessingRows] = useState<any[][] | null>(null);
+  const [liveProcessingFileName, setLiveProcessingFileName] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadSavedData() {
@@ -127,8 +132,21 @@ export default function App() {
               onClick={() => setActiveTab('processor')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'processor' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
             >
-              <Activity size={18} />
-              <span className="text-sm font-semibold">Data Processor</span>
+              <Sparkles size={18} className="text-indigo-400" />
+              <span className="text-sm font-semibold">Zyme E4H new</span>
+              <span className="ml-auto px-1.5 py-0.5 rounded text-[9px] font-black bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                NEW
+              </span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('live_processing')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'live_processing' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
+            >
+              <SlidersHorizontal size={18} className="text-indigo-400" />
+              <span className="text-sm font-semibold">Live Processing</span>
+              <span className="ml-auto px-1.5 py-0.5 rounded text-[9px] font-black bg-violet-500/20 text-violet-300 border border-violet-500/30">
+                BETA
+              </span>
             </button>
             <button 
               onClick={() => setActiveTab('consolidator')}
@@ -279,28 +297,39 @@ export default function App() {
         {/* Header */}
         <header className="relative z-10 px-8 py-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-white/20">
           <div>
-            <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
-              {activeTab === 'processor' 
-                ? 'Data Processing' 
-                : activeTab === 'consolidator' 
-                ? 'Data Consolidation' 
-                : activeTab === 'oof_consolidator'
-                ? 'Off Consolidation'
-                : activeTab === 'inventory' 
-                ? 'Inventory Reporting' 
-                : 'Data Sheet'}
-            </h2>
-            <p className="text-slate-500 text-sm font-medium">
-              {activeTab === 'processor' 
-                ? 'Manage and transform your compliance datasets' 
-                : activeTab === 'consolidator'
-                ? 'Merge multiple reports into a master dataset'
-                : activeTab === 'oof_consolidator'
-                ? 'Consolidate reports and attach source file name in Column A for all rows'
-                : activeTab === 'inventory'
-                ? 'Generate daily inventory status comments from Excel files'
-                : 'Upload global customer mappings to enrich your compliance sheet Column V'}
-            </p>
+            <div className="flex items-center gap-2.5">
+              <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
+                {activeTab === 'processor' 
+                  ? 'Zyme E4H New' 
+                  : activeTab === 'live_processing'
+                  ? 'Live Processing'
+                  : activeTab === 'consolidator' 
+                  ? 'Data Consolidation' 
+                  : activeTab === 'oof_consolidator'
+                  ? 'Off Consolidation'
+                  : activeTab === 'inventory' 
+                  ? 'Inventory Reporting' 
+                  : 'Data Sheet'}
+              </h2>
+              {activeTab === 'live_processing' && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-violet-600 text-white shadow-2xs">
+                  Beta
+                </span>
+              )}
+            </div>
+            {activeTab !== 'live_processing' && (
+              <p className="text-slate-500 text-sm font-medium">
+                {activeTab === 'processor' 
+                  ? 'Enterprise compliance data processing and deduplication' 
+                  : activeTab === 'consolidator'
+                  ? 'Merge multiple reports into a master dataset'
+                  : activeTab === 'oof_consolidator'
+                  ? 'Consolidate reports and attach source file name in Column A for all rows'
+                  : activeTab === 'inventory'
+                  ? 'Generate daily inventory status comments from Excel files'
+                  : 'Upload global customer mappings to enrich your compliance sheet Column V'}
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-3">
              <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-white/60 backdrop-blur border border-white/40 rounded-full shadow-sm">
@@ -320,6 +349,16 @@ export default function App() {
             aprvCodes={aprvCodes} 
             referenceData={referenceData}
             referenceFileName={referenceFileName}
+            onOpenLiveProcessing={(rows, name) => {
+              setLiveProcessingRows(rows);
+              setLiveProcessingFileName(name);
+              setActiveTab('live_processing');
+            }}
+          />
+        ) : activeTab === 'live_processing' ? (
+          <LiveProcessing 
+            initialProcessedRows={liveProcessingRows}
+            initialFileName={liveProcessingFileName}
           />
         ) : activeTab === 'consolidator' ? (
           <Consolidator />
