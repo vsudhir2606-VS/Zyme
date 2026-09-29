@@ -14,7 +14,9 @@ import {
   PanelLeftOpen,
   MapPin,
   X,
-  MessageSquare
+  MessageSquare,
+  ArrowLeft,
+  Settings
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -27,7 +29,8 @@ export type LiveActionType =
   | 'EMBF'
   | 'EMBN'
   | 'CN'
-  | 'BLOC';
+  | 'BLOC'
+  | 'Escalate';
 
 export interface ActionButtonDef {
   key: LiveActionType;
@@ -47,7 +50,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     key: 'SPLF',
     label: 'SPLF',
     shortcut: '1',
-    description: 'Sanctioned Party List Found',
+    description: 'False match',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
       normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
@@ -59,7 +62,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     key: 'SPLF(CC)',
     label: 'SPLF(CC)',
     shortcut: '2',
-    description: 'SPLF Country / Customer Check',
+    description: 'Comprehensive comment',
     colorTheme: {
       badge: 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold',
       normal: 'hover:border-emerald-500 hover:bg-emerald-50 text-emerald-900 border-emerald-300 bg-emerald-50/40',
@@ -83,7 +86,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     key: 'SPLE',
     label: 'SPLE',
     shortcut: '4',
-    description: 'Sanctioned Party List Entity',
+    description: 'Exemption',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
       normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
@@ -119,7 +122,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     key: 'EMBN',
     label: 'EMBN',
     shortcut: '7',
-    description: 'Embargo Not Found / Cleared',
+    description: 'Embassy, consulate army in ZEMB',
     colorTheme: {
       badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
       normal: 'hover:border-yellow-500 hover:bg-yellow-50 text-yellow-950 border-yellow-300 bg-yellow-50/50',
@@ -149,6 +152,18 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
       normal: 'hover:border-red-500 hover:bg-red-50 text-red-900 border-red-300 bg-red-50/40',
       active: 'bg-red-600 text-white border-red-700 ring-2 ring-red-300 shadow-sm',
       dot: 'bg-red-600',
+    },
+  },
+  {
+    key: 'Escalate',
+    label: 'Escalate',
+    shortcut: '0',
+    description: 'Escalate for further compliance review',
+    colorTheme: {
+      badge: 'bg-purple-100 text-purple-900 border-purple-300 font-bold',
+      normal: 'hover:border-purple-500 hover:bg-purple-50 text-purple-900 border-purple-300 bg-purple-50/40',
+      active: 'bg-purple-600 text-white border-purple-700 ring-2 ring-purple-300 shadow-sm',
+      dot: 'bg-purple-600',
     },
   },
 ];
@@ -404,6 +419,30 @@ export const getCustomerBoxTheme = (
     };
   }
 
+  // Escalate action: purple color
+  if (action === 'Escalate') {
+    return {
+      type: 'purple' as const,
+      containerClass: 'border-2 border-purple-500 bg-purple-50/95 shadow-md ring-2 ring-purple-300/60',
+      posnrClass: 'bg-purple-600',
+      badge: {
+        text: 'Escalate',
+        className: 'bg-purple-600 text-white shadow-2xs',
+        isAlert: true,
+      },
+      nameCardClass: 'p-3.5 rounded-xl bg-purple-100/90 border border-purple-300 shadow-2xs',
+      labelClass: 'text-purple-800 font-extrabold',
+      nameClass: 'text-purple-950 font-black',
+      statusBadgeClass: 'bg-purple-600 text-white border-purple-700 font-black',
+      subBorderClass: 'border-purple-200/80 text-purple-900/80',
+      subLabelClass: 'text-purple-700/80 font-medium',
+      countryBadgeClass: 'bg-purple-100 text-purple-900 border border-purple-200',
+      countryPinClass: 'text-purple-600',
+      actionLabelClass: 'text-purple-700',
+      actionBorderClass: 'border-purple-200/80',
+    };
+  }
+
   // 1. If no action assigned yet: check if ZKWD, ZEMB, APRV in name/status -> RED
   const isRedAlert = isRedNameMatch(customerName, status);
   if (isRedAlert) {
@@ -510,6 +549,11 @@ export const getSidebarItemStyle = (
       ? 'bg-red-100/80 border-l-red-600 shadow-2xs' 
       : 'border-l-red-600 bg-red-50/40 hover:bg-red-100/40';
   }
+  if (action === 'Escalate') {
+    return isSelected 
+      ? 'bg-purple-100/80 border-l-purple-600 shadow-2xs' 
+      : 'border-l-purple-600 bg-purple-50/40 hover:bg-purple-100/40';
+  }
   if (isRedItem) {
     return isSelected 
       ? 'bg-red-100/70 border-l-red-600 shadow-2xs' 
@@ -529,12 +573,16 @@ interface LiveProcessingProps {
   initialFile?: File | null;
   initialProcessedRows?: any[][] | null;
   initialFileName?: string | null;
+  onBack?: () => void;
+  onOpenSettings?: () => void;
 }
 
 export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   initialFile = null,
   initialProcessedRows = null,
   initialFileName = null,
+  onBack,
+  onOpenSettings,
 }) => {
   const [file, setFile] = useState<File | null>(initialFile);
   const [availableSheets, setAvailableSheets] = useState<string[]>([]);
@@ -819,7 +867,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         return;
       }
 
-      // Keys 1-9 for quick decisions
+      // Keys 1-9 and 0 for quick decisions
+      if (e.key === '0') {
+        const escalateDef = ACTION_BUTTON_CONFIG.find(a => a.key === 'Escalate');
+        if (escalateDef) {
+          e.preventDefault();
+          handleApplyAction(escalateDef.key);
+        }
+        return;
+      }
       const keyNum = parseInt(e.key, 10);
       if (keyNum >= 1 && keyNum <= 9) {
         const actionDef = ACTION_BUTTON_CONFIG[keyNum - 1];
@@ -1092,17 +1148,17 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   };
 
   return (
-    <div className="relative z-10 flex-1 flex flex-col items-center justify-start p-3 md:p-6 overflow-y-auto max-h-full font-inter w-full">
-      <div className="w-full max-w-6xl">
+    <div className="relative z-10 flex-1 flex flex-col w-full h-full overflow-hidden font-inter bg-white">
+      <div className="w-full h-full flex-1 flex flex-col overflow-hidden">
         
-        {/* CONTAINER CARD */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+        {/* FULL-SCREEN CONTAINER */}
+        <div className="bg-white w-full h-full flex-1 overflow-hidden flex flex-col">
           
           {cases.length === 0 ? (
             // ==========================================
             // UPLOAD STATE FOR LIVE PROCESSING
             // ==========================================
-            <div className="p-8 md:p-14 text-center">
+            <div className="flex-1 flex items-center justify-center p-8 md:p-14 text-center h-full overflow-y-auto">
               <div className="max-w-lg mx-auto space-y-6">
                 
                 <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-2xs">
@@ -1163,13 +1219,24 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
             // ==========================================
             // LIVE 1-BY-1 CLEAN FULL-SCREEN REVIEW
             // ==========================================
-            <div className="flex flex-col h-full">
+            <div className="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
               
               {/* TOP SLIM HEADER BAR */}
-              <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between gap-3 flex-wrap">
+              <div className="px-5 py-3 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between gap-3 flex-wrap flex-shrink-0">
                 
-                {/* Left: Collapsible Sidebar Toggle + Item Counter */}
+                {/* Left: Back Button + Collapsible Sidebar Toggle + Item Counter */}
                 <div className="flex items-center gap-2.5">
+                  {onBack && (
+                    <button
+                      onClick={onBack}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold shadow-2xs transition-all"
+                      title="Back to Zyme E4H New"
+                    >
+                      <ArrowLeft size={14} className="text-slate-600" />
+                      <span>Back</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => setIsSidebarOpen(prev => !prev)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold shadow-2xs transition-all"
@@ -1200,7 +1267,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   </div>
                 </div>
 
-                {/* Right: Prev / Next Navigation & Download */}
+                {/* Right: Prev / Next Navigation & Download & Settings */}
                 <div className="flex items-center gap-2 flex-wrap">
                   
                   {/* Prev / Next Buttons */}
@@ -1242,19 +1309,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   >
                     <RefreshCw size={14} />
                   </button>
+
+                  {onOpenSettings && (
+                    <button
+                      onClick={onOpenSettings}
+                      className="p-1.5 bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border border-slate-300 rounded-lg shadow-2xs transition-colors"
+                      title="Settings & Password Lock"
+                    >
+                      <Settings size={14} />
+                    </button>
+                  )}
                 </div>
 
               </div>
 
               {/* DUAL WORKSPACE: COLLAPSIBLE LEFT DRAWER + MAIN SCREEN */}
-              <div className="flex flex-1 min-h-[520px] relative overflow-hidden">
+              <div className="flex flex-1 min-h-0 relative overflow-hidden">
                 
                 {/* COLLAPSIBLE LEFT DRAWER: CASES QUEUE LIST */}
                 {isSidebarOpen && (
-                  <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 transition-all duration-200">
+                  <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 h-full overflow-hidden transition-all duration-200">
                     
                     {/* Search & Filter Header */}
-                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white">
+                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white flex-shrink-0">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
                         <input
@@ -1302,7 +1379,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                     </div>
 
                     {/* Scrollable Cases List */}
-                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 max-h-[500px] scrollbar-thin">
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 min-h-0 scrollbar-thin">
                       {filteredCases.length === 0 ? (
                         <div className="p-6 text-center text-xs text-slate-400">
                           No items match your filter.
@@ -1392,13 +1469,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 )}
 
                 {/* MAIN REVIEW WORKSPACE */}
-                <div className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto max-h-[620px] scrollbar-thin">
+                <div className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto h-full min-h-0 scrollbar-thin">
                   
                   {activeCase ? (
-                    <div className="space-y-4">
+                    <div className="flex-1 flex flex-col gap-4 min-h-0">
 
                       {/* SIDE-BY-SIDE BOXES: POSNR/CUSTOMER & RPL LIST */}
-                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-[240px]">
                         
                         {/* 
                           BOX 1 (LEFT / 5 Cols): POSNR & CUSTOMER NAME BOX
@@ -1546,10 +1623,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         {/* 
                           BOX 2 (RIGHT / 7 Cols): RPL NAME (SCROLLABLE IF MANY, SEARCH BAR, EXACT MATCH HIGHLIGHTED IN RED)
                         */}
-                        <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs flex flex-col">
+                        <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs flex flex-col h-full min-h-0">
                           
                           {/* RPL Header with search bar next to RPLname */}
-                          <div className="flex items-center justify-between pb-3 border-b border-slate-100 gap-2 flex-wrap sm:flex-nowrap">
+                          <div className="flex items-center justify-between pb-3 border-b border-slate-100 gap-2 flex-wrap sm:flex-nowrap flex-shrink-0">
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                                 RPL Name
@@ -1587,7 +1664,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           </div>
 
                           {/* RPL Scrollable List Container */}
-                          <div className="mt-3 space-y-2 overflow-y-auto max-h-[260px] pr-1 scrollbar-thin flex-1">
+                          <div className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0">
                             {displayedRplEntries.length === 0 ? (
                               <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                                 {rplSearchQuery.trim() ? (
@@ -1637,7 +1714,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       </div>
 
                       {/* CLEAN ACTION DECISION BUTTONS */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5">
+                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5 flex-shrink-0">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                             Compliance Decision
@@ -1650,15 +1727,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           )}
                         </div>
 
-                        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 md:grid-cols-10 gap-2">
                           {ACTION_BUTTON_CONFIG.map(btn => {
                             const isSelected = activeCase.action === btn.key;
                             return (
                               <button
                                 key={btn.key}
                                 onClick={() => handleApplyAction(btn.key)}
-                                title={`${btn.label} - ${btn.description}`}
-                                className={`relative flex items-center justify-center py-2 px-2.5 rounded-lg border text-xs font-bold transition-all active:scale-95 shadow-2xs ${
+                                title={`${btn.label}: ${btn.description}`}
+                                className={`group relative flex items-center justify-center py-2 px-2.5 rounded-lg border text-xs font-bold transition-all active:scale-95 shadow-2xs ${
                                   isSelected 
                                     ? btn.colorTheme.active 
                                     : btn.colorTheme.normal
@@ -1666,6 +1743,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               >
                                 <span className="text-xs font-black tracking-tight truncate">
                                   {btn.label}
+                                </span>
+
+                                {/* Hover description tooltip on long hover */}
+                                <span className="pointer-events-none absolute -top-9 left-1/2 -translate-x-1/2 z-30 whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-white opacity-0 shadow-md transition-opacity duration-200 delay-300 group-hover:opacity-100">
+                                  {btn.description}
                                 </span>
 
                                 {isSelected && (
@@ -1680,7 +1762,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       </div>
 
                       {/* COMMENT BOX */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2">
+                      <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
                             <MessageSquare size={13} className="text-indigo-600" />
@@ -1724,13 +1806,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   )}
 
                   {/* Clean Bottom Bar: Progress & Next */}
-                  <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 flex-shrink-0">
                     <div className="flex items-center gap-2 tabular-nums">
                       <span className="font-semibold text-slate-700">
                         {stats.percent}% Processed
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span className="hidden sm:inline">Shortcuts: [1–9] Decision, [◀/▶] Navigate, [Q] List</span>
+                      <span className="hidden sm:inline">Shortcuts: [1–9, 0] Decision, [◀/▶] Navigate, [Q] List</span>
                     </div>
 
                     <div className="flex items-center gap-2">
