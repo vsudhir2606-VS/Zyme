@@ -431,7 +431,7 @@ export default function App() {
         </div>
 
         {/* Header */}
-        <header className="relative z-10 px-8 py-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-white/20">
+        <header className="relative z-10 px-8 py-6 flex justify-between items-center bg-white/40 backdrop-blur-md border-b border-white/20 flex-shrink-0">
           <div>
             <div className="flex items-center gap-2.5">
               <h2 className="text-2xl font-bold text-slate-800 tracking-tight">

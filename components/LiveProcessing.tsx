@@ -14,7 +14,9 @@ import {
   PanelLeftOpen,
   MapPin,
   X,
-  MessageSquare
+  MessageSquare,
+  ArrowLeft,
+  Settings
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -571,12 +573,16 @@ interface LiveProcessingProps {
   initialFile?: File | null;
   initialProcessedRows?: any[][] | null;
   initialFileName?: string | null;
+  onBack?: () => void;
+  onOpenSettings?: () => void;
 }
 
 export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   initialFile = null,
   initialProcessedRows = null,
   initialFileName = null,
+  onBack,
+  onOpenSettings,
 }) => {
   const [file, setFile] = useState<File | null>(initialFile);
   const [availableSheets, setAvailableSheets] = useState<string[]>([]);
@@ -1142,17 +1148,17 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   };
 
   return (
-    <div className="relative z-10 flex-1 flex flex-col items-center justify-start p-3 md:p-6 overflow-y-auto max-h-full font-inter w-full">
-      <div className="w-full max-w-6xl">
+    <div className="relative z-10 flex-1 flex flex-col w-full h-full overflow-hidden font-inter bg-white">
+      <div className="w-full h-full flex-1 flex flex-col overflow-hidden">
         
-        {/* CONTAINER CARD */}
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
+        {/* FULL-SCREEN CONTAINER */}
+        <div className="bg-white w-full h-full flex-1 overflow-hidden flex flex-col">
           
           {cases.length === 0 ? (
             // ==========================================
             // UPLOAD STATE FOR LIVE PROCESSING
             // ==========================================
-            <div className="p-8 md:p-14 text-center">
+            <div className="flex-1 flex items-center justify-center p-8 md:p-14 text-center h-full overflow-y-auto">
               <div className="max-w-lg mx-auto space-y-6">
                 
                 <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-2xs">
@@ -1213,13 +1219,24 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
             // ==========================================
             // LIVE 1-BY-1 CLEAN FULL-SCREEN REVIEW
             // ==========================================
-            <div className="flex flex-col h-full">
+            <div className="flex flex-col flex-1 h-full min-h-0 overflow-hidden">
               
               {/* TOP SLIM HEADER BAR */}
-              <div className="px-4 py-3 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between gap-3 flex-wrap">
+              <div className="px-5 py-3 border-b border-slate-200 bg-slate-50/90 flex items-center justify-between gap-3 flex-wrap flex-shrink-0">
                 
-                {/* Left: Collapsible Sidebar Toggle + Item Counter */}
+                {/* Left: Back Button + Collapsible Sidebar Toggle + Item Counter */}
                 <div className="flex items-center gap-2.5">
+                  {onBack && (
+                    <button
+                      onClick={onBack}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold shadow-2xs transition-all"
+                      title="Back to Zyme E4H New"
+                    >
+                      <ArrowLeft size={14} className="text-slate-600" />
+                      <span>Back</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => setIsSidebarOpen(prev => !prev)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold shadow-2xs transition-all"
@@ -1250,7 +1267,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   </div>
                 </div>
 
-                {/* Right: Prev / Next Navigation & Download */}
+                {/* Right: Prev / Next Navigation & Download & Settings */}
                 <div className="flex items-center gap-2 flex-wrap">
                   
                   {/* Prev / Next Buttons */}
@@ -1292,19 +1309,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   >
                     <RefreshCw size={14} />
                   </button>
+
+                  {onOpenSettings && (
+                    <button
+                      onClick={onOpenSettings}
+                      className="p-1.5 bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border border-slate-300 rounded-lg shadow-2xs transition-colors"
+                      title="Settings & Password Lock"
+                    >
+                      <Settings size={14} />
+                    </button>
+                  )}
                 </div>
 
               </div>
 
               {/* DUAL WORKSPACE: COLLAPSIBLE LEFT DRAWER + MAIN SCREEN */}
-              <div className="flex flex-1 min-h-[520px] relative overflow-hidden">
+              <div className="flex flex-1 min-h-0 relative overflow-hidden">
                 
                 {/* COLLAPSIBLE LEFT DRAWER: CASES QUEUE LIST */}
                 {isSidebarOpen && (
-                  <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 transition-all duration-200">
+                  <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 h-full overflow-hidden transition-all duration-200">
                     
                     {/* Search & Filter Header */}
-                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white">
+                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white flex-shrink-0">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
                         <input
@@ -1352,7 +1379,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                     </div>
 
                     {/* Scrollable Cases List */}
-                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 max-h-[500px] scrollbar-thin">
+                    <div className="flex-1 overflow-y-auto divide-y divide-slate-100 min-h-0 scrollbar-thin">
                       {filteredCases.length === 0 ? (
                         <div className="p-6 text-center text-xs text-slate-400">
                           No items match your filter.
@@ -1442,13 +1469,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 )}
 
                 {/* MAIN REVIEW WORKSPACE */}
-                <div className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto max-h-[620px] scrollbar-thin">
+                <div className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto h-full min-h-0 scrollbar-thin">
                   
                   {activeCase ? (
-                    <div className="space-y-4">
+                    <div className="flex-1 flex flex-col gap-4 min-h-0">
 
                       {/* SIDE-BY-SIDE BOXES: POSNR/CUSTOMER & RPL LIST */}
-                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-[240px]">
                         
                         {/* 
                           BOX 1 (LEFT / 5 Cols): POSNR & CUSTOMER NAME BOX
@@ -1596,10 +1623,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         {/* 
                           BOX 2 (RIGHT / 7 Cols): RPL NAME (SCROLLABLE IF MANY, SEARCH BAR, EXACT MATCH HIGHLIGHTED IN RED)
                         */}
-                        <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs flex flex-col">
+                        <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs flex flex-col h-full min-h-0">
                           
                           {/* RPL Header with search bar next to RPLname */}
-                          <div className="flex items-center justify-between pb-3 border-b border-slate-100 gap-2 flex-wrap sm:flex-nowrap">
+                          <div className="flex items-center justify-between pb-3 border-b border-slate-100 gap-2 flex-wrap sm:flex-nowrap flex-shrink-0">
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                                 RPL Name
@@ -1637,7 +1664,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           </div>
 
                           {/* RPL Scrollable List Container */}
-                          <div className="mt-3 space-y-2 overflow-y-auto max-h-[260px] pr-1 scrollbar-thin flex-1">
+                          <div className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0">
                             {displayedRplEntries.length === 0 ? (
                               <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                                 {rplSearchQuery.trim() ? (
@@ -1687,7 +1714,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       </div>
 
                       {/* CLEAN ACTION DECISION BUTTONS */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5">
+                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5 flex-shrink-0">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                             Compliance Decision
@@ -1735,7 +1762,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       </div>
 
                       {/* COMMENT BOX */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2">
+                      <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
                             <MessageSquare size={13} className="text-indigo-600" />
@@ -1779,13 +1806,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   )}
 
                   {/* Clean Bottom Bar: Progress & Next */}
-                  <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <div className="pt-3 mt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500 flex-shrink-0">
                     <div className="flex items-center gap-2 tabular-nums">
                       <span className="font-semibold text-slate-700">
                         {stats.percent}% Processed
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span className="hidden sm:inline">Shortcuts: [1–9] Decision, [◀/▶] Navigate, [Q] List</span>
+                      <span className="hidden sm:inline">Shortcuts: [1–9, 0] Decision, [◀/▶] Navigate, [Q] List</span>
                     </div>
 
                     <div className="flex items-center gap-2">
