@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { processExcelFile } from '../utils/excelProcessor.ts';
 import * as XLSX from 'xlsx';
+import { safeSheetToAoA } from '../utils/excelSafety.ts';
 
 interface DataProcessorProps {
   highRiskKeywords?: string[];
@@ -94,8 +95,7 @@ export const DataProcessor: React.FC<DataProcessorProps> = ({
       const wb = XLSX.read(buffer, { type: 'array' });
       const firstSheetName = wb.SheetNames[0];
       const worksheet = wb.Sheets[firstSheetName];
-      const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { 
-        header: 1, 
+      const rows: any[][] = safeSheetToAoA(worksheet, { 
         defval: '', 
         blankrows: false 
       });

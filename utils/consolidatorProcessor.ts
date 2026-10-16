@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import './cptableSetup.ts';
+import { clampWorksheetRange } from './excelSafety.ts';
 
 export interface ConsolidatorProgressUpdate {
   currentFile: number;
@@ -123,6 +124,8 @@ export const consolidateFiles = async (
         warnings.push(`File "${file.name}" sheet "${sheetName}" was empty or could not be parsed.`);
         continue;
       }
+
+      clampWorksheetRange(worksheet);
 
       const xlsxUtils = XLSX.utils || (XLSX as any).default?.utils;
       const jsonData: any[][] = xlsxUtils.sheet_to_json(worksheet, {

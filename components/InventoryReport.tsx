@@ -15,6 +15,7 @@ import {
   Search,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { clampWorksheetRange } from '../utils/excelSafety.ts';
 
 interface ParsedInventoryRow {
   rowIndex: number;
@@ -202,6 +203,7 @@ export const InventoryReport: React.FC = () => {
       const workbook = xlsxRead(data, { cellDates: false });
       const firstSheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[firstSheetName];
+      clampWorksheetRange(worksheet);
 
       const rawRows = xlsxUtils.sheet_to_json(worksheet, {
         header: 1,

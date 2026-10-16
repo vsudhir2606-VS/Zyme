@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import './cptableSetup.ts';
+import { clampWorksheetRange } from './excelSafety.ts';
 
 export const GTS_HEADERS = [
   "Created By",
@@ -424,6 +425,8 @@ export const consolidateGtsFiles = async (
         });
         continue;
       }
+
+      clampWorksheetRange(worksheet);
 
       const xlsxUtils = XLSX.utils || (XLSX as any).default?.utils;
       const rawData: any[][] = xlsxUtils.sheet_to_json(worksheet, {

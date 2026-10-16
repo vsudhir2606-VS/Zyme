@@ -19,6 +19,7 @@ import {
   Settings
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { clampWorksheetRange } from '../utils/excelSafety.ts';
 
 export type LiveActionType = 
   | 'SPLF'
@@ -658,6 +659,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     if (!ws) {
       throw new Error(`Sheet "${sheetName}" not found.`);
     }
+    clampWorksheetRange(ws);
 
     const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
     if (!rows || rows.length === 0) {

@@ -21,6 +21,7 @@ import {
   findHeaderRow 
 } from '../utils/zymeE4hProcessor.ts';
 import * as XLSX from 'xlsx';
+import { safeSheetToAoA } from '../utils/excelSafety.ts';
 
 interface ProcessorProps {
   highRiskKeywords?: string[];
@@ -88,10 +89,10 @@ export const Processor: React.FC<ProcessorProps> = ({
       setSelectedSheet(activeSheet);
 
       if (activeSheet && wb.Sheets[activeSheet]) {
-        const rawRows: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[activeSheet], {
-          header: 1,
+        const rawRows: any[][] = safeSheetToAoA(wb.Sheets[activeSheet], {
           defval: '',
           blankrows: false,
+          maxRows: 100, // Header scan only needs the first few rows
         });
         if (rawRows && rawRows.length > 0) {
           const { headerRowIndex, mapping } = findHeaderRow(rawRows);
@@ -113,10 +114,10 @@ export const Processor: React.FC<ProcessorProps> = ({
       const arrayBuffer = await file.arrayBuffer();
       const wb = XLSX.read(arrayBuffer, { type: 'array' });
       if (wb.Sheets[newSheet]) {
-        const rawRows: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[newSheet], {
-          header: 1,
+        const rawRows: any[][] = safeSheetToAoA(wb.Sheets[newSheet], {
           defval: '',
           blankrows: false,
+          maxRows: 100,
         });
         if (rawRows && rawRows.length > 0) {
           const { headerRowIndex, mapping } = findHeaderRow(rawRows);

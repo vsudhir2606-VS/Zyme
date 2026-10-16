@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import './cptableSetup.ts';
+import { clampWorksheetRange, safeSheetToAoA, safeAoaToCsv, safeWriteXlsx } from './excelSafety.ts';
 
 export interface TargetColumnDef {
   key: string;
@@ -496,14 +497,13 @@ export const processZymeE4hFile = async (
   }
 
   const worksheet = workbook.Sheets[sheetName];
-  const rawRows: any[][] = XLSX.utils.sheet_to_json(worksheet, {
-    header: 1,
+  const rawRows: any[][] = safeSheetToAoA(worksheet, {
     defval: '',
     blankrows: false,
   });
 
   if (!rawRows || rawRows.length === 0) {
-    throw new Error('The selected sheet is empty.');
+    throw new Error('The selected sheet is empty or contains no readable rows.');
   }
 
   // 1. Locate Header Row & Column Mapping
@@ -1002,12 +1002,11 @@ export const processZymeE4hFile = async (
   sheet2Ws['!cols'] = sheet2ColWidths;
   XLSX.utils.book_append_sheet(outWb, sheet2Ws, 'Sheet 2');
 
-  const excelBuf = XLSX.write(outWb, { bookType: 'xlsx', type: 'array' });
-  const excelUint8 = new Uint8Array(excelBuf);
+  const excelUint8 = safeWriteXlsx(outWb);
 
-  // 4. Build CSV representations
-  const csvContent = XLSX.utils.sheet_to_csv(outWs);
-  const sheet2CsvContent = XLSX.utils.sheet_to_csv(sheet2Ws);
+  // 4. Build CSV representations (lightweight, safe from RangeError)
+  const csvContent = safeAoaToCsv(processedRows);
+  const sheet2CsvContent = safeAoaToCsv(sheet2ProcessedRows);
 
   return {
     fileName: file.name,

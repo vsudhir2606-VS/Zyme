@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import './cptableSetup.ts';
+import { clampWorksheetRange, safeSheetToAoA, safeWriteXlsx } from './excelSafety.ts';
 
 export interface ProcessConfig {
   highRiskKeywords: string[];
@@ -19,35 +20,37 @@ const removeCommonKeywords = (s: string): string => {
   ]);
 
   // Split by non-word characters and filter out the common keywords
-  const words = s.toLowerCase().split(/\W+/);
+  const words = String(s).toLowerCase().split(/\W+/);
   const filteredWords = words.filter(word => word && !commonKeywords.has(word));
   
   // Fallback to original lowercase string if everything got filtered out
   if (filteredWords.length === 0) {
-    return s.toLowerCase();
+    return String(s).toLowerCase();
   }
   return filteredWords.join(" ");
 };
 
 /**
  * Calculates a simple similarity score between two strings (0 to 100).
- * Uses a basic Levenshtein-based similarity.
+ * Uses a basic Levenshtein-based similarity with safe bounded allocation.
  */
-const fastEditDistance = (a: string, b: string): number => {
-  // Cap string lengths to 200 chars to prevent extreme allocations
-  const s1 = a.length > 200 ? a.slice(0, 200) : a;
-  const s2 = b.length > 200 ? b.slice(0, 200) : b;
+const fastEditDistance = (a: any, b: any): number => {
+  const strA = typeof a === 'string' ? a : String(a ?? '');
+  const strB = typeof b === 'string' ? b : String(b ?? '');
+  const s1 = strA.length > 200 ? strA.slice(0, 200) : strA;
+  const s2 = strB.length > 200 ? strB.slice(0, 200) : strB;
   if (s1 === s2) return 0;
   if (!s1.length) return s2.length;
   if (!s2.length) return s1.length;
 
-  let prev = new Int32Array(s2.length + 1);
-  let curr = new Int32Array(s2.length + 1);
-  for (let j = 0; j <= s2.length; j++) prev[j] = j;
+  const len2 = Math.max(0, Math.min(s2.length, 200));
+  let prev = new Int32Array(len2 + 1);
+  let curr = new Int32Array(len2 + 1);
+  for (let j = 0; j <= len2; j++) prev[j] = j;
 
   for (let i = 1; i <= s1.length; i++) {
     curr[0] = i;
-    for (let j = 1; j <= s2.length; j++) {
+    for (let j = 1; j <= len2; j++) {
       if (s1[i - 1] === s2[j - 1]) {
         curr[j] = prev[j - 1];
       } else {
@@ -56,7 +59,7 @@ const fastEditDistance = (a: string, b: string): number => {
     }
     prev.set(curr);
   }
-  return prev[s2.length];
+  return prev[len2];
 };
 
 /**
@@ -175,15 +178,14 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         
-        // Convert to array of arrays (header: 1 means array of arrays)
-        const jsonData: any[][] = XLSX.utils.sheet_to_json(worksheet, { 
-          header: 1, 
+        // Convert to array of arrays safely with bounded memory
+        const jsonData: any[][] = safeSheetToAoA(worksheet, { 
           defval: "", 
           blankrows: false 
         });
 
         if (jsonData.length === 0) {
-          throw new Error("The selected file is empty.");
+          throw new Error("The selected file is empty or contains no readable rows.");
         }
 
         // Define the output header structure
@@ -432,8 +434,8 @@ export const processExcelFile = async (file: File, config: ProcessConfig): Promi
           }
         }
 
-        const wbout = XLSX.write(newWb, { bookType: 'xlsx', type: 'array' });
-        resolve(new Uint8Array(wbout));
+        const excelUint8 = safeWriteXlsx(newWb);
+        resolve(excelUint8);
 
       } catch (err) {
         console.error("Excel Processing Error:", err);
