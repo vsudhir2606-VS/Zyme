@@ -16,10 +16,15 @@ import {
   X,
   MessageSquare,
   ArrowLeft,
-  Settings
+  Settings,
+  ArrowDownAZ,
+  ArrowUpAZ,
+  ArrowUpDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
+
+export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
 
 export type LiveActionType = 
   | 'SPLF'
@@ -597,7 +602,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   
   // Parsed 1-by-1 Cases
   const [cases, setCases] = useState<LiveProcessingCase[]>([]);
-  const [currentCaseIndex, setCurrentCaseIndex] = useState(0);
+  const [sortOption, setSortOption] = useState<LiveSortOption>('original');
+  const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
 
   // Collapsible sidebar state (collapsed by default)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -610,11 +616,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const [caseNote, setCaseNote] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const rplListRef = useRef<HTMLDivElement | null>(null);
+  const mainWorkspaceRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset RPL search query whenever active case changes
+  // Reset RPL search query and scroll positions whenever active case changes
   useEffect(() => {
     setRplSearchQuery('');
-  }, [currentCaseIndex]);
+    if (rplListRef.current) {
+      rplListRef.current.scrollTop = 0;
+    }
+    if (mainWorkspaceRef.current) {
+      mainWorkspaceRef.current.scrollTop = 0;
+    }
+  }, [activeCaseId]);
 
   // If initialProcessedRows is passed in from Processor tab
   useEffect(() => {
@@ -859,7 +873,202 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     });
 
     setCases(builtCases);
-    setCurrentCaseIndex(0);
+    if (builtCases.length > 0) {
+      setActiveCaseId(builtCases[0].caseId);
+    } else {
+      setActiveCaseId(null);
+    }
+  };
+
+  // Sorted cases according to sortOption (Original file order, Alphabetical A-Z, Alphabetical Z-A)
+  const sortedCases = useMemo(() => {
+    if (sortOption === 'original') return cases;
+
+    const list = [...cases];
+    if (sortOption === 'customer-asc') {
+      list.sort((a, b) => {
+        const nameA = (a.customerName || '').trim();
+        const nameB = (b.customerName || '').trim();
+        if (!nameA && !nameB) return a.caseNumber - b.caseNumber;
+        if (!nameA) return 1;
+        if (!nameB) return -1;
+        const cmp = nameA.localeCompare(nameB, undefined, { sensitivity: 'base', numeric: true });
+        if (cmp !== 0) return cmp;
+        return a.caseNumber - b.caseNumber;
+      });
+    } else if (sortOption === 'customer-desc') {
+      list.sort((a, b) => {
+        const nameA = (a.customerName || '').trim();
+        const nameB = (b.customerName || '').trim();
+        if (!nameA && !nameB) return a.caseNumber - b.caseNumber;
+        if (!nameA) return 1;
+        if (!nameB) return -1;
+        const cmp = nameB.localeCompare(nameA, undefined, { sensitivity: 'base', numeric: true });
+        if (cmp !== 0) return cmp;
+        return a.caseNumber - b.caseNumber;
+      });
+    }
+    return list;
+  }, [cases, sortOption]);
+
+  // Filtered cases for sidebar queue based on search & filter mode
+  const filteredCases = useMemo(() => {
+    return sortedCases.filter(c => {
+      if (filterMode === 'pending' && c.action !== null) return false;
+      if (filterMode === 'reviewed' && c.action === null) return false;
+      if (filterMode !== 'all' && filterMode !== 'pending' && filterMode !== 'reviewed') {
+        if (c.action !== filterMode) return false;
+      }
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const posnrMatch = c.posnr.toLowerCase().includes(q);
+        const nameMatch = c.customerName.toLowerCase().includes(q);
+        const countryMatch = c.country.toLowerCase().includes(q);
+        const rplMatch = c.rplEntries.some(r => 
+          r.rplName.toLowerCase().includes(q) || 
+          r.match.toLowerCase().includes(q) ||
+          r.typeOfList.toLowerCase().includes(q)
+        );
+        if (!posnrMatch && !nameMatch && !countryMatch && !rplMatch) return false;
+      }
+
+      return true;
+    });
+  }, [sortedCases, filterMode, searchQuery]);
+
+  // Active case resolution
+  const activeCase: LiveProcessingCase | undefined = useMemo(() => {
+    if (!cases || cases.length === 0) return undefined;
+    if (activeCaseId) {
+      const found = cases.find(c => c.caseId === activeCaseId);
+      if (found) return found;
+    }
+    return sortedCases[0] || cases[0];
+  }, [cases, activeCaseId, sortedCases]);
+
+  // Keep activeCaseId in sync when cases change
+  useEffect(() => {
+    if (cases.length > 0) {
+      if (!activeCaseId || !cases.some(c => c.caseId === activeCaseId)) {
+        setActiveCaseId((sortedCases[0] || cases[0]).caseId);
+      }
+    } else {
+      setActiveCaseId(null);
+    }
+  }, [cases, activeCaseId, sortedCases]);
+
+  // Statistics
+  const stats = useMemo(() => {
+    const total = cases.length;
+    const reviewed = cases.filter(c => c.action !== null).length;
+    const pending = total - reviewed;
+    const percent = total > 0 ? Math.round((reviewed / total) * 100) : 0;
+
+    return { total, reviewed, pending, percent };
+  }, [cases]);
+
+  // Active list for sequential navigation (filtered cases if non-empty, otherwise sorted list)
+  const navigationList = useMemo(() => {
+    return filteredCases.length > 0 ? filteredCases : sortedCases;
+  }, [filteredCases, sortedCases]);
+
+  const currentNavIndex = useMemo(() => {
+    if (!activeCase || navigationList.length === 0) return -1;
+    return navigationList.findIndex(c => c.caseId === activeCase.caseId);
+  }, [navigationList, activeCase]);
+
+  const currentSortedIndex = useMemo(() => {
+    if (!activeCase) return 0;
+    const idx = sortedCases.findIndex(c => c.caseId === activeCase.caseId);
+    return idx >= 0 ? idx : 0;
+  }, [sortedCases, activeCase]);
+
+  const canPrev = currentNavIndex > 0;
+  const canNext = currentNavIndex >= 0 && currentNavIndex < navigationList.length - 1;
+
+  const handlePrevCase = () => {
+    if (canPrev) {
+      setActiveCaseId(navigationList[currentNavIndex - 1].caseId);
+    }
+  };
+
+  const handleNextCase = () => {
+    if (canNext) {
+      setActiveCaseId(navigationList[currentNavIndex + 1].caseId);
+    }
+  };
+
+  // Filtered RPL entries for active case based on rplSearchQuery
+  const displayedRplEntries = useMemo(() => {
+    if (!activeCase) return [];
+    if (!rplSearchQuery.trim()) return activeCase.rplEntries;
+    const q = rplSearchQuery.toLowerCase().trim();
+    return activeCase.rplEntries.filter(entry => 
+      (entry.rplName || '').toLowerCase().includes(q)
+    );
+  }, [activeCase, rplSearchQuery]);
+
+  // Count of 100% exact matches in active case
+  const exactMatchCount = useMemo(() => {
+    if (!activeCase) return 0;
+    return activeCase.rplEntries.filter(entry => 
+      isExact100Match(activeCase.customerName, entry.rplName)
+    ).length;
+  }, [activeCase]);
+
+  // Handle note/comment change reactively so it updates case instantly
+  const handleNoteChange = (newNote: string) => {
+    setCaseNote(newNote);
+    if (!activeCase) return;
+    const targetCaseId = activeCase.caseId;
+    setCases(prev => prev.map(c => c.caseId === targetCaseId ? {
+      ...c,
+      notes: newNote,
+    } : c));
+  };
+
+  // Action assignment
+  const handleApplyAction = (actionKey: LiveActionType) => {
+    if (!activeCase) return;
+    const targetCaseId = activeCase.caseId;
+
+    setCases(prev => {
+      return prev.map(c => {
+        if (c.caseId === targetCaseId) {
+          return {
+            ...c,
+            action: actionKey,
+            actionTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            notes: caseNote,
+          };
+        }
+        return c;
+      });
+    });
+
+    if (autoAdvance) {
+      setTimeout(() => {
+        const curIdx = navigationList.findIndex(c => c.caseId === targetCaseId);
+        // Find next pending item in the current navigation list
+        const nextPending = navigationList.slice(curIdx + 1).find(c => c.action === null);
+        if (nextPending) {
+          setActiveCaseId(nextPending.caseId);
+        } else if (curIdx >= 0 && curIdx < navigationList.length - 1) {
+          setActiveCaseId(navigationList[curIdx + 1].caseId);
+        }
+      }, 120);
+    }
+  };
+
+  const handleClearAction = () => {
+    if (!activeCase) return;
+    const targetCaseId = activeCase.caseId;
+    setCases(prev => prev.map(c => c.caseId === targetCaseId ? {
+      ...c,
+      action: null,
+      actionTimestamp: undefined,
+    } : c));
   };
 
   // Keyboard shortcut listener
@@ -903,135 +1112,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentCaseIndex, cases, autoAdvance, filterMode]);
+  }, [activeCase, navigationList, currentNavIndex, canPrev, canNext, autoAdvance, caseNote]);
 
   // Sync current case note
   useEffect(() => {
-    const c = cases[currentCaseIndex];
-    setCaseNote(c?.notes || '');
-  }, [currentCaseIndex, cases]);
-
-  // Statistics
-  const stats = useMemo(() => {
-    const total = cases.length;
-    const reviewed = cases.filter(c => c.action !== null).length;
-    const pending = total - reviewed;
-    const percent = total > 0 ? Math.round((reviewed / total) * 100) : 0;
-
-    return { total, reviewed, pending, percent };
-  }, [cases]);
-
-  // Filtered cases for sidebar queue
-  const filteredCases = useMemo(() => {
-    return cases.filter(c => {
-      if (filterMode === 'pending' && c.action !== null) return false;
-      if (filterMode === 'reviewed' && c.action === null) return false;
-      if (filterMode !== 'all' && filterMode !== 'pending' && filterMode !== 'reviewed') {
-        if (c.action !== filterMode) return false;
-      }
-
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const posnrMatch = c.posnr.toLowerCase().includes(q);
-        const nameMatch = c.customerName.toLowerCase().includes(q);
-        const countryMatch = c.country.toLowerCase().includes(q);
-        const rplMatch = c.rplEntries.some(r => 
-          r.rplName.toLowerCase().includes(q) || 
-          r.match.toLowerCase().includes(q) ||
-          r.typeOfList.toLowerCase().includes(q)
-        );
-        if (!posnrMatch && !nameMatch && !countryMatch && !rplMatch) return false;
-      }
-
-      return true;
-    });
-  }, [cases, filterMode, searchQuery]);
-
-  const activeCase: LiveProcessingCase | undefined = cases[currentCaseIndex];
-
-  // Filtered RPL entries for active case based on rplSearchQuery
-  const displayedRplEntries = useMemo(() => {
-    if (!activeCase) return [];
-    if (!rplSearchQuery.trim()) return activeCase.rplEntries;
-    const q = rplSearchQuery.toLowerCase().trim();
-    return activeCase.rplEntries.filter(entry => 
-      (entry.rplName || '').toLowerCase().includes(q)
-    );
-  }, [activeCase, rplSearchQuery]);
-
-  // Count of 100% exact matches in active case
-  const exactMatchCount = useMemo(() => {
-    if (!activeCase) return 0;
-    return activeCase.rplEntries.filter(entry => 
-      isExact100Match(activeCase.customerName, entry.rplName)
-    ).length;
-  }, [activeCase]);
-
-  // Handle note/comment change reactively so it updates case instantly
-  const handleNoteChange = (newNote: string) => {
-    setCaseNote(newNote);
-    if (!activeCase) return;
-    setCases(prev => {
-      const next = [...prev];
-      next[currentCaseIndex] = {
-        ...next[currentCaseIndex],
-        notes: newNote,
-      };
-      return next;
-    });
-  };
-
-  // Action assignment
-  const handleApplyAction = (actionKey: LiveActionType) => {
-    if (!activeCase) return;
-
-    setCases(prev => {
-      const next = [...prev];
-      next[currentCaseIndex] = {
-        ...next[currentCaseIndex],
-        action: actionKey,
-        actionTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        notes: caseNote,
-      };
-      return next;
-    });
-
-    if (autoAdvance) {
-      setTimeout(() => {
-        const nextPendingIndex = cases.findIndex((c, idx) => idx > currentCaseIndex && c.action === null);
-        if (nextPendingIndex !== -1) {
-          setCurrentCaseIndex(nextPendingIndex);
-        } else if (currentCaseIndex < cases.length - 1) {
-          setCurrentCaseIndex(currentCaseIndex + 1);
-        }
-      }, 120);
-    }
-  };
-
-  const handleClearAction = () => {
-    if (!activeCase) return;
-    setCases(prev => {
-      const next = [...prev];
-      next[currentCaseIndex] = {
-        ...next[currentCaseIndex],
-        action: null,
-        actionTimestamp: undefined,
-      };
-      return next;
-    });
-  };
-
-  const handlePrevCase = () => {
-    if (currentCaseIndex > 0) {
-      setCurrentCaseIndex(currentCaseIndex - 1);
-    }
-  };
-
-  const handleNextCase = () => {
-    if (currentCaseIndex < cases.length - 1) {
-      setCurrentCaseIndex(currentCaseIndex + 1);
-    }
-  };
+    setCaseNote(activeCase?.notes || '');
+  }, [activeCase?.caseId, activeCase?.notes]);
 
   // Download reviewed Excel
   const handleDownloadReviewedExcel = () => {
@@ -1142,7 +1228,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setRawHeaders([]);
     setRawDataRows([]);
     setCases([]);
-    setCurrentCaseIndex(0);
+    setActiveCaseId(null);
+    setSortOption('original');
     setError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1259,13 +1346,38 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
                   <div className="flex items-center gap-2.5">
                     <span className="font-mono text-xs font-bold text-slate-800 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shadow-2xs tabular-nums">
-                      Item {currentCaseIndex + 1} of {cases.length}
+                      Order {currentSortedIndex + 1} of {cases.length}
                     </span>
                     <div className="hidden sm:flex items-center gap-2 text-xs text-slate-500 font-medium tabular-nums">
                       <span>{stats.reviewed} reviewed</span>
                       <span aria-hidden="true">·</span>
                       <span>{stats.pending} left</span>
                     </div>
+                  </div>
+
+                  {/* Header Sort Option Dropdown (Compact) */}
+                  <div className={`hidden md:flex items-center gap-1 rounded-md px-2 py-1 border shadow-2xs transition-all text-xs ${
+                    sortOption !== 'original' 
+                      ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' 
+                      : 'bg-white border-slate-300 hover:border-slate-400'
+                  }`}>
+                    <ArrowDownAZ size={12} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                    <span className="text-[10px] font-bold uppercase text-slate-500">Sort:</span>
+                    <select
+                      value={sortOption}
+                      onChange={(e) => setSortOption(e.target.value as LiveSortOption)}
+                      className="bg-transparent text-[11px] font-semibold text-slate-700 focus:outline-none cursor-pointer pr-0.5"
+                      title="Sort orders list"
+                    >
+                      <option value="original">File Order</option>
+                      <option value="customer-asc">Name (A → Z)</option>
+                      <option value="customer-desc">Name (Z → A)</option>
+                    </select>
+                    {sortOption !== 'original' && (
+                      <span className="px-1 py-0.2 rounded text-[8px] font-black uppercase bg-indigo-600 text-white leading-tight">
+                        {sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -1276,18 +1388,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   <div className="flex items-center rounded-lg border border-slate-300 bg-white shadow-2xs overflow-hidden">
                     <button
                       onClick={handlePrevCase}
-                      disabled={currentCaseIndex === 0}
+                      disabled={!canPrev}
                       className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors border-r border-slate-200 flex items-center gap-1 text-xs font-semibold"
-                      title="Previous Item (Left Arrow or [)"
+                      title="Previous Order (Left Arrow or [)"
                     >
                       <ChevronLeft size={14} />
                       <span className="hidden md:inline">Prev</span>
                     </button>
                     <button
                       onClick={handleNextCase}
-                      disabled={currentCaseIndex >= cases.length - 1}
+                      disabled={!canNext}
                       className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 disabled:opacity-30 disabled:pointer-events-none transition-colors flex items-center gap-1 text-xs font-semibold"
-                      title="Next Item (Right Arrow or ])"
+                      title="Next Order (Right Arrow or ])"
                     >
                       <span className="hidden md:inline">Next</span>
                       <ChevronRight size={14} />
@@ -1332,8 +1444,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 {isSidebarOpen && (
                   <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 h-full overflow-hidden transition-all duration-200">
                     
-                    {/* Search & Filter Header */}
-                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white flex-shrink-0">
+                    {/* Search & Sort & Filter Header */}
+                    <div className="p-2.5 border-b border-slate-200 space-y-2.5 bg-white flex-shrink-0">
+                      
+                      {/* Search Input */}
                       <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
                         <input
@@ -1343,6 +1457,49 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           onChange={(e) => setSearchQuery(e.target.value)}
                           className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
                         />
+                      </div>
+
+                      {/* Compact Sort Orders Row */}
+                      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-slate-50/90 rounded-md border border-slate-200/80">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+                          <ArrowDownAZ size={11} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                          Sort:
+                        </span>
+                        <div className="flex items-center gap-0.5 bg-slate-200/70 p-0.5 rounded">
+                          <button
+                            onClick={() => setSortOption('original')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                              sortOption === 'original'
+                                ? 'bg-white text-slate-900 shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                            title="Original file sequence"
+                          >
+                            File
+                          </button>
+                          <button
+                            onClick={() => setSortOption('customer-asc')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                              sortOption === 'customer-asc'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                            title="Sort alphabetically by Customer Name (A to Z)"
+                          >
+                            A-Z
+                          </button>
+                          <button
+                            onClick={() => setSortOption('customer-desc')}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                              sortOption === 'customer-desc'
+                                ? 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                            title="Sort reverse alphabetically by Customer Name (Z to A)"
+                          >
+                            Z-A
+                          </button>
+                        </div>
                       </div>
 
                       {/* Filter Mode Tabs */}
@@ -1388,15 +1545,14 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         </div>
                       ) : (
                         filteredCases.map((c) => {
-                          const actualIdx = cases.findIndex(orig => orig.caseId === c.caseId);
-                          const isSelected = actualIdx === currentCaseIndex;
+                          const isSelected = c.caseId === activeCase?.caseId;
                           const isRedItem = isRedNameMatch(c.customerName, c.status);
                           const isBlueNoAddItem = !isRedItem && isNoAddMatch(c.customerName, c.status, c.isNoAdd);
 
                           return (
                             <div
                               key={c.caseId}
-                              onClick={() => setCurrentCaseIndex(actualIdx)}
+                              onClick={() => setActiveCaseId(c.caseId)}
                               className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isBlueNoAddItem, isSelected)}`}
                             >
                               <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -1471,7 +1627,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 )}
 
                 {/* MAIN REVIEW WORKSPACE */}
-                <div className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto h-full min-h-0 scrollbar-thin">
+                <div ref={mainWorkspaceRef} className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto h-full min-h-0 scrollbar-thin">
                   
                   {activeCase ? (
                     <div className="flex-1 flex flex-col gap-4 min-h-0">
@@ -1666,7 +1822,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           </div>
 
                           {/* RPL Scrollable List Container */}
-                          <div className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0">
+                          <div 
+                            key={activeCase?.caseId || 'empty'}
+                            ref={rplListRef}
+                            className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0"
+                          >
                             {displayedRplEntries.length === 0 ? (
                               <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
                                 {rplSearchQuery.trim() ? (
@@ -1820,14 +1980,14 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                     <div className="flex items-center gap-2">
                       <button
                         onClick={handlePrevCase}
-                        disabled={currentCaseIndex === 0}
+                        disabled={!canPrev}
                         className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
                       >
                         Prev
                       </button>
                       <button
                         onClick={handleNextCase}
-                        disabled={currentCaseIndex >= cases.length - 1}
+                        disabled={!canNext}
                         className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold disabled:opacity-30 disabled:pointer-events-none transition-colors shadow-2xs"
                       >
                         Next ➜

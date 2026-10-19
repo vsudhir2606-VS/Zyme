@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
-import { DataProcessor } from './components/DataProcessor.tsx';
 import { LiveProcessing } from './components/LiveProcessing.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
 import { OofConsolidator } from './components/OofConsolidator.tsx';
@@ -20,7 +19,7 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'data_processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
+type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
@@ -271,13 +270,6 @@ export default function App() {
               </span>
             </button>
             <button 
-              onClick={() => setActiveTab('data_processor')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'data_processor' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
-            >
-              <FileSpreadsheet size={18} className="text-indigo-400" />
-              <span className="text-sm font-semibold">Data Processor</span>
-            </button>
-            <button 
               onClick={() => handleRequestOpenLiveProcessing()}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'live_processing' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
             >
@@ -445,8 +437,6 @@ export default function App() {
               <h2 className="text-2xl font-bold text-slate-800 tracking-tight">
                 {activeTab === 'processor' 
                   ? 'Zyme E4H New' 
-                  : activeTab === 'data_processor'
-                  ? 'Data Processor'
                   : activeTab === 'live_processing'
                   ? 'Live Processing'
                   : activeTab === 'consolidator' 
@@ -467,8 +457,6 @@ export default function App() {
               <p className="text-slate-500 text-sm font-medium">
                 {activeTab === 'processor' 
                   ? 'Enterprise compliance data processing and deduplication' 
-                  : activeTab === 'data_processor'
-                  ? 'Rules-based compliance processor with risk detection and Data Sheet enrichment'
                   : activeTab === 'consolidator'
                   ? 'Merge multiple reports into a master dataset'
                   : activeTab === 'oof_consolidator'
@@ -511,13 +499,6 @@ export default function App() {
             onOpenLiveProcessing={(rows, name) => {
               handleRequestOpenLiveProcessing(rows, name);
             }}
-          />
-        ) : activeTab === 'data_processor' ? (
-          <DataProcessor 
-            highRiskKeywords={highRiskKeywords} 
-            aprvCodes={aprvCodes} 
-            referenceData={referenceData}
-            referenceFileName={referenceFileName}
           />
         ) : activeTab === 'live_processing' ? (
           <LiveProcessing 
