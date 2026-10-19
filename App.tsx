@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check, Trash2, Search, BookmarkPlus } from 'lucide-react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check, Trash2, Search, BookmarkPlus, GitCompare } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { LiveProcessing } from './components/LiveProcessing.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
 import { OofConsolidator } from './components/OofConsolidator.tsx';
 import { DataSheet } from './components/DataSheet.tsx';
+import { SsRefining } from './components/SsRefining.tsx';
 import { getReferenceData, saveReferenceData, clearReferenceData } from './utils/db.ts';
 import { 
   getSavedSplCcComments, 
@@ -26,7 +27,7 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet';
+type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet' | 'ss_refining';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
@@ -354,6 +355,16 @@ export default function App() {
               <span className="text-sm font-semibold">Inventory Report</span>
             </button>
             <button 
+              onClick={() => setActiveTab('ss_refining')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'ss_refining' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
+            >
+              <GitCompare size={18} />
+              <span className="text-sm font-semibold">SS Refining</span>
+              <span className="ml-auto px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                NEW
+              </span>
+            </button>
+            <button 
               onClick={() => setActiveTab('datasheet')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'datasheet' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
             >
@@ -493,6 +504,8 @@ export default function App() {
                   ? 'Off Consolidation'
                   : activeTab === 'inventory' 
                   ? 'Inventory Reporting' 
+                  : activeTab === 'ss_refining'
+                  ? 'SS Refining'
                   : 'Data Sheet'}
               </h2>
               {activeTab === 'live_processing' && (
@@ -511,6 +524,8 @@ export default function App() {
                   ? 'Consolidate reports and attach source file name in Column A for all rows'
                   : activeTab === 'inventory'
                   ? 'Generate daily inventory status comments from Excel files'
+                  : activeTab === 'ss_refining'
+                  ? 'Reconcile total reference numbers against existing references to identify missing records'
                   : 'Upload global customer mappings to enrich your compliance sheet Column V'}
               </p>
             )}
@@ -560,6 +575,8 @@ export default function App() {
           <OofConsolidator />
         ) : activeTab === 'inventory' ? (
           <InventoryReport />
+        ) : activeTab === 'ss_refining' ? (
+          <SsRefining />
         ) : (
           <DataSheet 
             onDataLoaded={async (data, name) => {

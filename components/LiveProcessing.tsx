@@ -15,6 +15,7 @@ import {
   MapPin,
   X,
   MessageSquare,
+  MessageSquarePlus,
   ArrowLeft,
   ArrowDownAZ,
   ArrowUpAZ,
@@ -2137,7 +2138,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           </div>
 
                           {/* Quick Icon Actions (Save, Insert Template, Matched Comment) */}
-                          <div className="flex items-center gap-1">
+                          <div className="flex items-center gap-1.5">
                             
                             {/* Matched Comment Icon Button (exact Customer Name & Address match in saved file) */}
                             {matchedSavedComment && (
@@ -2145,17 +2146,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                 type="button"
                                 onClick={() => {
                                   handleNoteChange(matchedSavedComment.comments);
-                                  setSplCcSaveNotice('Matched comment inserted from saved file!');
+                                  setSplCcSaveNotice('Matched comment inserted from saved archive!');
                                   setTimeout(() => setSplCcSaveNotice(null), 3000);
                                   setTimeout(() => {
                                     commentInputRef.current?.focus();
                                   }, 50);
                                 }}
-                                className="inline-flex items-center gap-1 p-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 shadow-2xs transition-all cursor-pointer group"
-                                title={`Exact match on Customer Name & Address in saved file!\nClick to insert: "${matchedSavedComment.comments}"`}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 shadow-2xs transition-all cursor-pointer group"
+                                title={`Exact match on Customer Name & Address found in saved archive!\nClick to insert saved comment: "${matchedSavedComment.comments}"`}
                                 aria-label="Insert matched comment"
                               >
-                                <Sparkles size={14} className="text-amber-600 group-hover:scale-110 transition-transform" />
+                                <MessageSquarePlus size={14} className="text-amber-700 group-hover:scale-110 transition-transform" />
+                                <span className="text-[10px] font-bold text-amber-800 hidden sm:inline">Insert Match</span>
                               </button>
                             )}
 
@@ -2187,10 +2189,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               type="button"
                               onClick={handleSaveCurrentSplCcComment}
                               className="p-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-600 hover:border-emerald-600 text-emerald-700 hover:text-white shadow-2xs transition-all cursor-pointer group"
-                              title="Save SPL CC comment to repository (downloadable as Excel in Settings)"
+                              title="Save comment to repository (downloadable as Excel in Settings)"
                               aria-label="Save comment"
                             >
-                              <BookmarkPlus size={14} className="group-hover:scale-110 transition-transform" />
+                              <Save size={14} className="group-hover:scale-110 transition-transform" />
                             </button>
                           </div>
                         </div>
