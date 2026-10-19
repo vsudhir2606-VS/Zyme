@@ -28,6 +28,9 @@ export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
 
 export type LiveActionType = 
   | 'SPLF'
+  | 'SPLF I vs D'
+  | 'SPLF DC'
+  | 'SPLF CC'
   | 'SPLF(CC)'
   | 'No add'
   | 'SPLE'
@@ -65,10 +68,10 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     },
   },
   {
-    key: 'SPLF(CC)',
-    label: 'SPLF(CC)',
+    key: 'SPLF I vs D',
+    label: 'SPLF I vs D',
     shortcut: '2',
-    description: 'Comprehensive comment',
+    description: 'SPLF Individual vs Denial',
     colorTheme: {
       badge: 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold',
       normal: 'hover:border-emerald-500 hover:bg-emerald-50 text-emerald-900 border-emerald-300 bg-emerald-50/40',
@@ -77,9 +80,33 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     },
   },
   {
+    key: 'SPLF DC',
+    label: 'SPLF DC',
+    shortcut: '3',
+    description: 'SPLF Different Country / Entity',
+    colorTheme: {
+      badge: 'bg-teal-100 text-teal-900 border-teal-300 font-bold',
+      normal: 'hover:border-teal-500 hover:bg-teal-50 text-teal-900 border-teal-300 bg-teal-50/40',
+      active: 'bg-teal-600 text-white border-teal-700 ring-2 ring-teal-300 shadow-sm',
+      dot: 'bg-teal-500',
+    },
+  },
+  {
+    key: 'SPLF CC',
+    label: 'SPLF CC',
+    shortcut: '4',
+    description: 'Comprehensive comment (Customer and RPL are different)',
+    colorTheme: {
+      badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
+      normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
+      active: 'bg-green-600 text-white border-green-700 ring-2 ring-green-300 shadow-sm',
+      dot: 'bg-green-500',
+    },
+  },
+  {
     key: 'No add',
     label: 'No add',
-    shortcut: '3',
+    shortcut: '5',
     description: 'No Address / Cleared',
     colorTheme: {
       badge: 'bg-blue-100 text-blue-900 border-blue-300 font-bold',
@@ -91,7 +118,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'SPLE',
     label: 'SPLE',
-    shortcut: '4',
+    shortcut: '6',
     description: 'Exemption',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
@@ -103,7 +130,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'ZKWD',
     label: 'ZKWD',
-    shortcut: '5',
+    shortcut: '7',
     description: 'Keyword Match Review',
     colorTheme: {
       badge: 'bg-orange-100 text-orange-900 border-orange-300 font-bold',
@@ -115,7 +142,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'EMBF',
     label: 'EMBF',
-    shortcut: '6',
+    shortcut: '8',
     description: 'Embargo Found',
     colorTheme: {
       badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
@@ -127,7 +154,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'EMBN',
     label: 'EMBN',
-    shortcut: '7',
+    shortcut: '9',
     description: 'Embassy, consulate army in ZEMB',
     colorTheme: {
       badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
@@ -139,7 +166,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'CN',
     label: 'CN',
-    shortcut: '8',
+    shortcut: '',
     description: 'Country Notification',
     colorTheme: {
       badge: 'bg-slate-200 text-slate-800 border-slate-300 font-bold',
@@ -151,7 +178,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'BLOC',
     label: 'BLOC',
-    shortcut: '9',
+    shortcut: '',
     description: 'Blocked Transaction',
     colorTheme: {
       badge: 'bg-red-100 text-red-900 border-red-300 font-bold',
@@ -281,8 +308,15 @@ export const getCustomerBoxTheme = (
   status?: string,
   isNoAddFlag?: boolean
 ) => {
-  // SPLF, SPLFcc, SPLE: green color and customer name box animates green
-  if (action === 'SPLF' || action === 'SPLF(CC)' || action === 'SPLE') {
+  // SPLF, SPLF I vs D, SPLF DC, SPLF CC, SPLE: green color and customer name box animates green
+  if (
+    action === 'SPLF' || 
+    action === 'SPLF I vs D' || 
+    action === 'SPLF DC' || 
+    action === 'SPLF CC' || 
+    action === 'SPLF(CC)' || 
+    action === 'SPLE'
+  ) {
     return {
       type: 'green' as const,
       containerClass: 'border-2 border-green-500 bg-green-50/95 shadow-md ring-2 ring-green-400/50 animate-green-pulse',
@@ -525,7 +559,14 @@ export const getSidebarItemStyle = (
   isBlueNoAddItem: boolean,
   isSelected: boolean
 ) => {
-  if (action === 'SPLF' || action === 'SPLF(CC)' || action === 'SPLE') {
+  if (
+    action === 'SPLF' || 
+    action === 'SPLF I vs D' || 
+    action === 'SPLF DC' || 
+    action === 'SPLF CC' || 
+    action === 'SPLF(CC)' || 
+    action === 'SPLE'
+  ) {
     return isSelected 
       ? 'bg-green-100/80 border-l-green-600 shadow-2xs' 
       : 'border-l-green-500 bg-green-50/40 hover:bg-green-100/40';
@@ -618,6 +659,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rplListRef = useRef<HTMLDivElement | null>(null);
   const mainWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const commentInputRef = useRef<HTMLInputElement | null>(null);
 
   // Reset RPL search query and scroll positions whenever active case changes
   useEffect(() => {
@@ -770,7 +812,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
         let initialAction: LiveActionType | null = null;
         if (rawExistingAction) {
-          const matchedAct = ACTION_BUTTON_CONFIG.find(a => a.key.toLowerCase() === rawExistingAction.toLowerCase());
+          const cleanAct = rawExistingAction.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const matchedAct = ACTION_BUTTON_CONFIG.find(a => {
+            const cleanKey = a.key.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const cleanLabel = a.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+            return cleanKey === cleanAct || cleanLabel === cleanAct || a.key.toLowerCase() === rawExistingAction.toLowerCase();
+          });
           if (matchedAct) {
             initialAction = matchedAct.key;
           }
@@ -1028,10 +1075,22 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     } : c));
   };
 
+  const SPLF_CC_DEFAULT_TEXT = "SPLF - False SPL Match- Customer and RPL are different.customer -   , RPL - ";
+
   // Action assignment
   const handleApplyAction = (actionKey: LiveActionType) => {
     if (!activeCase) return;
     const targetCaseId = activeCase.caseId;
+
+    const isSplfCc = actionKey === 'SPLF CC' || actionKey === 'SPLF(CC)';
+    let noteToApply = caseNote;
+
+    if (isSplfCc) {
+      if (!caseNote || !caseNote.trim() || !caseNote.includes('Customer and RPL are different')) {
+        noteToApply = SPLF_CC_DEFAULT_TEXT;
+      }
+      setCaseNote(noteToApply);
+    }
 
     setCases(prev => {
       return prev.map(c => {
@@ -1040,12 +1099,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
             ...c,
             action: actionKey,
             actionTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-            notes: caseNote,
+            notes: noteToApply,
           };
         }
         return c;
       });
     });
+
+    if (isSplfCc) {
+      // Focus comment box immediately so user can add more text to it
+      setTimeout(() => {
+        if (commentInputRef.current) {
+          commentInputRef.current.focus();
+          const targetIndex = noteToApply.indexOf('customer - ');
+          if (targetIndex !== -1) {
+            const cursorTarget = targetIndex + 'customer - '.length;
+            commentInputRef.current.setSelectionRange(cursorTarget, cursorTarget);
+          } else {
+            commentInputRef.current.setSelectionRange(noteToApply.length, noteToApply.length);
+          }
+        }
+      }, 50);
+      return; // Do not auto-advance away
+    }
 
     if (autoAdvance) {
       setTimeout(() => {
@@ -1078,22 +1154,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         return;
       }
 
-      // Keys 1-9 and 0 for quick decisions
-      if (e.key === '0') {
-        const escalateDef = ACTION_BUTTON_CONFIG.find(a => a.key === 'Escalate');
-        if (escalateDef) {
-          e.preventDefault();
-          handleApplyAction(escalateDef.key);
-        }
-        return;
-      }
-      const keyNum = parseInt(e.key, 10);
-      if (keyNum >= 1 && keyNum <= 9) {
-        const actionDef = ACTION_BUTTON_CONFIG[keyNum - 1];
-        if (actionDef) {
-          e.preventDefault();
-          handleApplyAction(actionDef.key);
-        }
+      // Keys for quick decisions matching ACTION_BUTTON_CONFIG shortcuts
+      const matchedAction = ACTION_BUTTON_CONFIG.find(a => a.shortcut && a.shortcut === e.key);
+      if (matchedAction) {
+        e.preventDefault();
+        handleApplyAction(matchedAction.key);
         return;
       }
 
@@ -1889,7 +1954,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           )}
                         </div>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-5 md:grid-cols-10 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12 gap-1.5 sm:gap-2">
                           {ACTION_BUTTON_CONFIG.map(btn => {
                             const isSelected = activeCase.action === btn.key;
                             return (
@@ -1897,13 +1962,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                 key={btn.key}
                                 onClick={() => handleApplyAction(btn.key)}
                                 title={`${btn.label}: ${btn.description}`}
-                                className={`group relative flex items-center justify-center py-2 px-2.5 rounded-lg border text-xs font-bold transition-all active:scale-95 shadow-2xs ${
+                                className={`group relative flex items-center justify-center py-2 px-1 sm:px-1.5 rounded-lg border text-xs font-bold transition-all active:scale-95 shadow-2xs ${
                                   isSelected 
                                     ? btn.colorTheme.active 
                                     : btn.colorTheme.normal
                                 }`}
                               >
-                                <span className="text-xs font-black tracking-tight truncate">
+                                <span className="text-[11px] sm:text-xs font-black tracking-tight truncate leading-tight">
                                   {btn.label}
                                 </span>
 
@@ -1925,23 +1990,39 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
                       {/* COMMENT BOX */}
                       <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between flex-wrap gap-1">
                           <div className="flex items-center gap-1.5">
                             <MessageSquare size={13} className="text-indigo-600" />
                             <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                               Comment
                             </span>
                           </div>
-                          {caseNote && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
-                              <Check size={11} strokeWidth={3} />
-                              Saved
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleNoteChange(SPLF_CC_DEFAULT_TEXT);
+                                setTimeout(() => {
+                                  commentInputRef.current?.focus();
+                                }, 50);
+                              }}
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold hover:underline cursor-pointer"
+                              title="Paste default SPLF CC template"
+                            >
+                              Insert SPLF CC template
+                            </button>
+                            {caseNote && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+                                <Check size={11} strokeWidth={3} />
+                                Saved
+                              </span>
+                            )}
+                          </div>
                         </div>
 
                         <div className="relative">
                           <input
+                            ref={commentInputRef}
                             type="text"
                             value={caseNote}
                             onChange={(e) => handleNoteChange(e.target.value)}
@@ -1952,7 +2033,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             <button
                               onClick={() => handleNoteChange('')}
                               title="Clear comment"
-                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded"
+                              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer"
                             >
                               <X size={13} />
                             </button>
