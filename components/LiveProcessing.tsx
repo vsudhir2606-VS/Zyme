@@ -16,13 +16,22 @@ import {
   X,
   MessageSquare,
   ArrowLeft,
-  Settings,
   ArrowDownAZ,
   ArrowUpAZ,
-  ArrowUpDown
+  ArrowUpDown,
+  Bookmark,
+  BookMarked,
+  BookmarkPlus,
+  Save,
+  Settings,
+  FileSpreadsheet,
+  Sparkles,
+  FileText,
+  FileCheck
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
+import { saveSplCcComment, getSavedSplCcComments, SavedSplCcComment } from '../utils/splCcStorage.ts';
 
 export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
 
@@ -655,21 +664,58 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [rplSearchQuery, setRplSearchQuery] = useState('');
   const [caseNote, setCaseNote] = useState('');
+  const [savedCommentsList, setSavedCommentsList] = useState<SavedSplCcComment[]>(() => {
+    try {
+      return getSavedSplCcComments();
+    } catch {
+      return [];
+    }
+  });
+  const [splCcSaveNotice, setSplCcSaveNotice] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rplListRef = useRef<HTMLDivElement | null>(null);
   const mainWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const commentInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Reset RPL search query and scroll positions whenever active case changes
+  // Sync saved SPL CC list across events (saving in LiveProcessing or modifying in Settings)
   useEffect(() => {
-    setRplSearchQuery('');
+    const handleSplCcUpdate = () => {
+      try {
+        setSavedCommentsList(getSavedSplCcComments());
+      } catch {
+        // no-op
+      }
+    };
+    window.addEventListener('zyme:splcc-updated', handleSplCcUpdate);
+    window.addEventListener('storage', handleSplCcUpdate);
+    return () => {
+      window.removeEventListener('zyme:splcc-updated', handleSplCcUpdate);
+      window.removeEventListener('storage', handleSplCcUpdate);
+    };
+  }, []);
+
+  // Helper to strictly reset scroll positions to top
+  const resetScrollToTop = () => {
     if (rplListRef.current) {
       rplListRef.current.scrollTop = 0;
     }
     if (mainWorkspaceRef.current) {
       mainWorkspaceRef.current.scrollTop = 0;
     }
+  };
+
+  // Reset RPL search query and scroll positions whenever active case changes
+  // Multiple ticks (immediate, animationFrame, and 25ms timeout) guarantee it stays at top from the beginning
+  useEffect(() => {
+    setRplSearchQuery('');
+    resetScrollToTop();
+    const rafId = requestAnimationFrame(resetScrollToTop);
+    const timeoutId = setTimeout(resetScrollToTop, 25);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(timeoutId);
+    };
   }, [activeCaseId]);
 
   // If initialProcessedRows is passed in from Processor tab
@@ -1036,14 +1082,43 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   const handlePrevCase = () => {
     if (canPrev) {
+      resetScrollToTop();
       setActiveCaseId(navigationList[currentNavIndex - 1].caseId);
     }
   };
 
   const handleNextCase = () => {
     if (canNext) {
+      resetScrollToTop();
       setActiveCaseId(navigationList[currentNavIndex + 1].caseId);
     }
+  };
+
+  // Save current case's SPL CC comment to persistent storage (downloadable in Settings)
+  const handleSaveCurrentSplCcComment = () => {
+    if (!activeCase) return;
+    const commentText = caseNote.trim() || activeCase.notes.trim() || SPLF_CC_DEFAULT_TEXT;
+    const addressStr = [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ') || 'NO add';
+    const rplNamesStr = activeCase.rplEntries.map(e => e.rplName).filter(Boolean).join('; ') || 'None';
+
+    const result = saveSplCcComment({
+      posnr: activeCase.posnr,
+      customerName: activeCase.customerName || `Customer (Posnr ${activeCase.posnr})`,
+      address: addressStr,
+      country: activeCase.country || '',
+      rplNames: rplNamesStr,
+      comments: commentText,
+    });
+
+    try {
+      setSavedCommentsList(getSavedSplCcComments());
+    } catch {
+      // no-op
+    }
+    setSplCcSaveNotice(result.isUpdate ? 'SPL CC comment updated!' : 'SPL CC comment saved!');
+    setTimeout(() => {
+      setSplCcSaveNotice(null);
+    }, 3000);
   };
 
   // Filtered RPL entries for active case based on rplSearchQuery
@@ -1063,6 +1138,41 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       isExact100Match(activeCase.customerName, entry.rplName)
     ).length;
   }, [activeCase]);
+
+  // Check if current case has an exact Name & Address match in saved comments file/storage
+  const matchedSavedComment = useMemo(() => {
+    if (!activeCase || !activeCase.customerName?.trim() || savedCommentsList.length === 0) return null;
+    
+    // Normalize string: trim, lower case, collapse multiple whitespace
+    const cleanStr = (s?: string) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    
+    const curName = cleanStr(activeCase.customerName);
+    const curAddr = cleanStr(
+      [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode]
+        .filter(Boolean)
+        .join(', ')
+    );
+
+    // Look for exact match on both Customer Name and Address
+    const found = savedCommentsList.find(saved => {
+      const savedName = cleanStr(saved.customerName);
+      const savedAddr = cleanStr(saved.address);
+
+      if (savedName !== curName) return false;
+
+      // Both have address
+      if (curAddr && savedAddr) {
+        return curAddr === savedAddr;
+      }
+
+      // If neither has address (or 'no add')
+      const isCurNoAdd = !curAddr || curAddr === 'no add';
+      const isSavedNoAdd = !savedAddr || savedAddr === 'no add';
+      return isCurNoAdd && isSavedNoAdd;
+    });
+
+    return found || null;
+  }, [activeCase, savedCommentsList]);
 
   // Handle note/comment change reactively so it updates case instantly
   const handleNoteChange = (newNote: string) => {
@@ -1420,26 +1530,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                     </div>
                   </div>
 
-                  {/* Header Sort Option Dropdown (Compact) */}
-                  <div className={`hidden md:flex items-center gap-1 rounded-md px-2 py-1 border shadow-2xs transition-all text-xs ${
+                  {/* Header Sort Option Dropdown (Ultra Compact) */}
+                  <div className={`hidden md:flex items-center gap-1 rounded-md px-1.5 py-0.5 border shadow-2xs transition-all ${
                     sortOption !== 'original' 
                       ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' 
                       : 'bg-white border-slate-300 hover:border-slate-400'
                   }`}>
-                    <ArrowDownAZ size={12} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
-                    <span className="text-[10px] font-bold uppercase text-slate-500">Sort:</span>
+                    <ArrowDownAZ size={11} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                    <span className="text-[9px] font-bold uppercase text-slate-500">Sort:</span>
                     <select
                       value={sortOption}
-                      onChange={(e) => setSortOption(e.target.value as LiveSortOption)}
-                      className="bg-transparent text-[11px] font-semibold text-slate-700 focus:outline-none cursor-pointer pr-0.5"
-                      title="Sort orders list"
+                      onChange={(e) => {
+                        resetScrollToTop();
+                        setSortOption(e.target.value as LiveSortOption);
+                      }}
+                      className="bg-transparent text-[10px] font-semibold text-slate-700 focus:outline-none cursor-pointer pr-0.5 py-0"
+                      title="Sort orders list by customer name"
                     >
                       <option value="original">File Order</option>
                       <option value="customer-asc">Name (A → Z)</option>
                       <option value="customer-desc">Name (Z → A)</option>
                     </select>
                     {sortOption !== 'original' && (
-                      <span className="px-1 py-0.2 rounded text-[8px] font-black uppercase bg-indigo-600 text-white leading-tight">
+                      <span className="px-1 py-0 rounded text-[8px] font-black uppercase bg-indigo-600 text-white leading-tight">
                         {sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
                       </span>
                     )}
@@ -1524,16 +1637,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         />
                       </div>
 
-                      {/* Compact Sort Orders Row */}
-                      <div className="flex items-center justify-between gap-1 px-2 py-1 bg-slate-50/90 rounded-md border border-slate-200/80">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                          <ArrowDownAZ size={11} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                      {/* Smaller Sort Orders Row */}
+                      <div className="flex items-center justify-between gap-1 px-1.5 py-0.5 bg-slate-50 rounded border border-slate-200/80">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-0.5">
+                          <ArrowDownAZ size={10} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
                           Sort:
                         </span>
                         <div className="flex items-center gap-0.5 bg-slate-200/70 p-0.5 rounded">
                           <button
-                            onClick={() => setSortOption('original')}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                            onClick={() => {
+                              resetScrollToTop();
+                              setSortOption('original');
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
                               sortOption === 'original'
                                 ? 'bg-white text-slate-900 shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -1543,8 +1659,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             File
                           </button>
                           <button
-                            onClick={() => setSortOption('customer-asc')}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                            onClick={() => {
+                              resetScrollToTop();
+                              setSortOption('customer-asc');
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
                               sortOption === 'customer-asc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -1554,8 +1673,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             A-Z
                           </button>
                           <button
-                            onClick={() => setSortOption('customer-desc')}
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all ${
+                            onClick={() => {
+                              resetScrollToTop();
+                              setSortOption('customer-desc');
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
                               sortOption === 'customer-desc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -1889,7 +2011,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           {/* RPL Scrollable List Container */}
                           <div 
                             key={activeCase?.caseId || 'empty'}
-                            ref={rplListRef}
+                            ref={(el) => {
+                              rplListRef.current = el;
+                              if (el) {
+                                el.scrollTop = 0;
+                              }
+                            }}
                             className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0"
                           >
                             {displayedRplEntries.length === 0 ? (
@@ -1988,37 +2115,93 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         </div>
                       </div>
 
-                      {/* COMMENT BOX */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
-                        <div className="flex items-center justify-between flex-wrap gap-1">
-                          <div className="flex items-center gap-1.5">
+                      {/* COMMENT BOX & SAVE SPL CC OPTION */}
+                      <div className="p-3 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
                             <MessageSquare size={13} className="text-indigo-600" />
                             <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                               Comment
                             </span>
+                            {activeCase.action === 'SPLF CC' && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800 border border-green-200">
+                                SPLF CC Active
+                              </span>
+                            )}
+                            {matchedSavedComment && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200 shadow-2xs">
+                                <Sparkles size={11} className="text-amber-600" />
+                                <span>Saved Match Available</span>
+                              </span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2.5">
+
+                          {/* Quick Icon Actions (Save, Insert Template, Matched Comment) */}
+                          <div className="flex items-center gap-1">
+                            
+                            {/* Matched Comment Icon Button (exact Customer Name & Address match in saved file) */}
+                            {matchedSavedComment && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleNoteChange(matchedSavedComment.comments);
+                                  setSplCcSaveNotice('Matched comment inserted from saved file!');
+                                  setTimeout(() => setSplCcSaveNotice(null), 3000);
+                                  setTimeout(() => {
+                                    commentInputRef.current?.focus();
+                                  }, 50);
+                                }}
+                                className="inline-flex items-center gap-1 p-1.5 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 shadow-2xs transition-all cursor-pointer group"
+                                title={`Exact match on Customer Name & Address in saved file!\nClick to insert: "${matchedSavedComment.comments}"`}
+                                aria-label="Insert matched comment"
+                              >
+                                <Sparkles size={14} className="text-amber-600 group-hover:scale-110 transition-transform" />
+                              </button>
+                            )}
+
+                            {/* Insert Template Icon Button */}
                             <button
                               type="button"
                               onClick={() => {
                                 handleNoteChange(SPLF_CC_DEFAULT_TEXT);
                                 setTimeout(() => {
-                                  commentInputRef.current?.focus();
+                                  if (commentInputRef.current) {
+                                    commentInputRef.current.focus();
+                                    const targetIndex = SPLF_CC_DEFAULT_TEXT.indexOf('customer - ');
+                                    if (targetIndex !== -1) {
+                                      const cursorTarget = targetIndex + 'customer - '.length;
+                                      commentInputRef.current.setSelectionRange(cursorTarget, cursorTarget);
+                                    }
+                                  }
                                 }, 50);
                               }}
-                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-semibold hover:underline cursor-pointer"
-                              title="Paste default SPLF CC template"
+                              className="p-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-indigo-50 hover:border-indigo-200 text-slate-600 hover:text-indigo-600 shadow-2xs transition-all cursor-pointer group"
+                              title="Insert default SPLF CC template"
+                              aria-label="Insert SPLF CC template"
                             >
-                              Insert SPLF CC template
+                              <FileText size={14} className="group-hover:scale-110 transition-transform" />
                             </button>
-                            {caseNote && (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
-                                <Check size={11} strokeWidth={3} />
-                                Saved
-                              </span>
-                            )}
+
+                            {/* Save Comment Icon Button */}
+                            <button
+                              type="button"
+                              onClick={handleSaveCurrentSplCcComment}
+                              className="p-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-600 hover:border-emerald-600 text-emerald-700 hover:text-white shadow-2xs transition-all cursor-pointer group"
+                              title="Save SPL CC comment to repository (downloadable as Excel in Settings)"
+                              aria-label="Save comment"
+                            >
+                              <BookmarkPlus size={14} className="group-hover:scale-110 transition-transform" />
+                            </button>
                           </div>
                         </div>
+
+                        {/* Save Confirmation Notification */}
+                        {splCcSaveNotice && (
+                          <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200 rounded-lg text-xs font-semibold text-emerald-800 animate-in fade-in duration-200">
+                            <Check size={12} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
+                            <span>{splCcSaveNotice}</span>
+                          </div>
+                        )}
 
                         <div className="relative">
                           <input

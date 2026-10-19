@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check, Trash2, Search, BookmarkPlus } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { LiveProcessing } from './components/LiveProcessing.tsx';
@@ -7,6 +7,13 @@ import { Consolidator } from './components/Consolidator.tsx';
 import { OofConsolidator } from './components/OofConsolidator.tsx';
 import { DataSheet } from './components/DataSheet.tsx';
 import { getReferenceData, saveReferenceData, clearReferenceData } from './utils/db.ts';
+import { 
+  getSavedSplCcComments, 
+  deleteSavedSplCcComment, 
+  clearAllSavedSplCcComments, 
+  exportSplCcCommentsToExcel, 
+  SavedSplCcComment 
+} from './utils/splCcStorage.ts';
 
 import { InventoryReport } from './components/InventoryReport.tsx';
 
@@ -70,6 +77,47 @@ export default function App() {
   const [confirmPwdInput, setConfirmPwdInput] = useState<string>('');
   const [pwdChangeError, setPwdChangeError] = useState<string | null>(null);
   const [pwdChangeSuccess, setPwdChangeSuccess] = useState<string | null>(null);
+
+  // Saved SPL CC Comments State for Settings Modal
+  const [savedSplCcList, setSavedSplCcList] = useState<SavedSplCcComment[]>(() => {
+    try {
+      return getSavedSplCcComments();
+    } catch {
+      return [];
+    }
+  });
+  const [splCcSearch, setSplCcSearch] = useState<string>('');
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [settingsActiveTab, setSettingsActiveTab] = useState<'splcc' | 'security'>('splcc');
+
+  // Sync saved SPL CC list whenever updated
+  useEffect(() => {
+    const handleSplCcUpdate = () => {
+      try {
+        setSavedSplCcList(getSavedSplCcComments());
+      } catch {
+        // no-op
+      }
+    };
+    window.addEventListener('zyme:splcc-updated', handleSplCcUpdate);
+    window.addEventListener('storage', handleSplCcUpdate);
+    return () => {
+      window.removeEventListener('zyme:splcc-updated', handleSplCcUpdate);
+      window.removeEventListener('storage', handleSplCcUpdate);
+    };
+  }, []);
+
+  // Also refresh whenever Settings opens
+  useEffect(() => {
+    if (isSettingsOpen) {
+      try {
+        setSavedSplCcList(getSavedSplCcComments());
+        setExportNotice(null);
+      } catch {
+        // no-op
+      }
+    }
+  }, [isSettingsOpen]);
 
   useEffect(() => {
     localStorage.setItem('zyme_liveLockEnabled', JSON.stringify(isLiveLockEnabled));
@@ -504,6 +552,7 @@ export default function App() {
           <LiveProcessing 
             initialProcessedRows={liveProcessingRows}
             initialFileName={liveProcessingFileName}
+            onOpenSettings={() => setIsSettingsOpen(true)}
           />
         ) : activeTab === 'consolidator' ? (
           <Consolidator />
@@ -630,186 +679,452 @@ export default function App() {
         {/* SETTINGS MODAL (Password Enable Option & Change Password Option) */}
         {isSettingsOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-6 animate-in fade-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl max-w-2xl w-full flex flex-col max-h-[88vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+              
+              {/* ELITE HEADER */}
+              <div className="px-6 py-4.5 border-b border-slate-100 flex items-center justify-between bg-white flex-shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
-                    <Settings size={19} />
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 flex-shrink-0">
+                    <Settings size={20} />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-slate-900">
-                      Settings
+                    <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                      Settings & Controls
                     </h3>
-                    <p className="text-xs text-slate-500">
-                      Live Processing lock & password controls
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      SPL CC comments repository, Excel export & access lock
                     </p>
                   </div>
                 </div>
                 <button
                   onClick={() => setIsSettingsOpen(false)}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                  className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+                  title="Close settings"
                 >
-                  <X size={16} />
+                  <X size={17} />
                 </button>
               </div>
 
-              {/* Section 1: Password Enable / Lock Option */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    {isLiveLockEnabled ? (
-                      <Lock size={15} className="text-amber-600" />
-                    ) : (
-                      <Unlock size={15} className="text-emerald-600" />
-                    )}
-                    <span className="text-xs font-bold text-slate-900">
-                      Live Processing Password Lock
-                    </span>
-                  </div>
-                  <span className={`text-xs font-semibold ${
-                    isLiveLockEnabled ? 'text-amber-700' : 'text-emerald-700'
+              {/* SEGMENTED TAB SWITCHER */}
+              <div className="px-6 pt-2 bg-slate-50/70 border-b border-slate-200/80 flex items-center gap-2 flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSettingsActiveTab('splcc')}
+                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer ${
+                    settingsActiveTab === 'splcc'
+                      ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-xl -mb-px'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <FileSpreadsheet size={15} className={settingsActiveTab === 'splcc' ? 'text-indigo-600' : 'text-slate-400'} />
+                  <span>SPL CC Comments Archive</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
+                    settingsActiveTab === 'splcc'
+                      ? 'bg-indigo-100 text-indigo-700'
+                      : 'bg-slate-200/80 text-slate-600'
                   }`}>
-                    {isLiveLockEnabled ? (isLiveUnlocked ? 'Enabled (Unlocked)' : 'Locked') : 'Disabled'}
+                    {savedSplCcList.length}
                   </span>
-                </div>
+                </button>
 
-                <form onSubmit={handleToggleLockSetting} className="space-y-2.5 pt-1">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="password"
-                      value={settingsTogglePassword}
-                      onChange={(e) => {
-                        setSettingsTogglePassword(e.target.value);
-                        setSettingsToggleError(null);
-                        setSettingsToggleSuccess(null);
-                      }}
-                      placeholder="Enter current password..."
-                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    />
-                    <button
-                      type="submit"
-                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
-                        isLiveLockEnabled
-                          ? 'bg-slate-800 hover:bg-slate-900 text-white'
-                          : 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                      }`}
-                    >
-                      {isLiveLockEnabled ? 'Disable Lock' : 'Enable Lock'}
-                    </button>
-                  </div>
-
-                  {isLiveLockEnabled && isLiveUnlocked && (
-                    <div className="pt-1 flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsLiveUnlocked(false);
-                          if (activeTab === 'live_processing') {
-                            setActiveTab('processor');
-                          }
-                          setSettingsToggleSuccess('Live Processing has been locked.');
-                        }}
-                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 hover:text-amber-800"
-                      >
-                        <Lock size={11} />
-                        <span>Lock Live Processing Now</span>
-                      </button>
-                    </div>
-                  )}
-
-                  {settingsToggleError && (
-                    <p className="text-xs text-red-600 font-medium">{settingsToggleError}</p>
-                  )}
-                  {settingsToggleSuccess && (
-                    <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                      <Check size={12} strokeWidth={3} />
-                      <span>{settingsToggleSuccess}</span>
-                    </p>
-                  )}
-                </form>
+                <button
+                  type="button"
+                  onClick={() => setSettingsActiveTab('security')}
+                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer ${
+                    settingsActiveTab === 'security'
+                      ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-xl -mb-px'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Lock size={15} className={settingsActiveTab === 'security' ? 'text-indigo-600' : 'text-slate-400'} />
+                  <span>Access & Security</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                    isLiveLockEnabled ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    {isLiveLockEnabled ? (isLiveUnlocked ? 'Unlocked' : 'Locked') : 'Disabled'}
+                  </span>
+                </button>
               </div>
 
-              {/* Section 2: Change Password Option */}
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-3">
-                <div className="flex items-center gap-2">
-                  <KeyRound size={15} className="text-indigo-600" />
-                  <span className="text-xs font-bold text-slate-900">
-                    Change Password
-                  </span>
-                </div>
+              {/* MODAL BODY */}
+              <div className="p-6 overflow-y-auto space-y-5 flex-1 min-h-0 bg-slate-50/40">
 
-                <form onSubmit={handleChangePassword} className="space-y-3">
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                      Current Password
-                    </label>
-                    <input
-                      type="password"
-                      value={currentPwdInput}
-                      onChange={(e) => {
-                        setCurrentPwdInput(e.target.value);
-                        setPwdChangeError(null);
-                        setPwdChangeSuccess(null);
-                      }}
-                      placeholder="Current password"
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                    />
-                  </div>
+                {/* TAB 1: SPL CC COMMENTS ARCHIVE & EXCEL EXPORT */}
+                {settingsActiveTab === 'splcc' && (
+                  <div className="space-y-4">
+                    
+                    {/* Top Stat Overview Bar */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Total Archived
+                        </span>
+                        <div className="text-xl font-black text-slate-900 mt-1 tabular-nums flex items-baseline gap-1.5">
+                          <span>{savedSplCcList.length}</span>
+                          <span className="text-xs font-semibold text-slate-500">records</span>
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        New Password
-                      </label>
-                      <input
-                        type="password"
-                        value={newPwdInput}
-                        onChange={(e) => {
-                          setNewPwdInput(e.target.value);
-                          setPwdChangeError(null);
-                          setPwdChangeSuccess(null);
-                        }}
-                        placeholder="New password"
-                        className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                      />
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Export Format
+                        </span>
+                        <div className="text-sm font-bold text-slate-800 mt-1 flex items-center gap-1.5">
+                          <FileSpreadsheet size={15} className="text-emerald-600" />
+                          <span>Microsoft Excel (.xlsx)</span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Included Fields
+                        </span>
+                        <div className="text-[11px] font-medium text-slate-600 mt-1 line-clamp-1" title="Customer Name, Address, Country, RPL Names, Comments">
+                          Name, Address, Country, RPL & Notes
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                        Confirm Password
-                      </label>
-                      <input
-                        type="password"
-                        value={confirmPwdInput}
-                        onChange={(e) => {
-                          setConfirmPwdInput(e.target.value);
-                          setPwdChangeError(null);
-                          setPwdChangeSuccess(null);
-                        }}
-                        placeholder="Confirm new password"
-                        className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                      />
+
+                    {/* Action Bar */}
+                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">
+                          Excel Spreadsheet Export
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          Includes Customer Name, Address & Country with RPL Names & Comments
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {savedSplCcList.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (window.confirm("Are you sure you want to clear all saved SPL CC comments?")) {
+                                clearAllSavedSplCcComments();
+                                setSavedSplCcList([]);
+                              }
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-2 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl transition-colors font-medium cursor-pointer"
+                          >
+                            <Trash2 size={13} />
+                            <span>Clear Archive</span>
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (savedSplCcList.length === 0) return;
+                            const success = exportSplCcCommentsToExcel(savedSplCcList);
+                            if (success) {
+                              setExportNotice('Excel file downloaded with Customer Name, Address, Country, RPL Names & Comments.');
+                              setTimeout(() => setExportNotice(null), 4000);
+                            }
+                          }}
+                          disabled={savedSplCcList.length === 0}
+                          className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 disabled:opacity-40 disabled:pointer-events-none text-white text-xs font-bold rounded-xl shadow-2xs transition-all cursor-pointer"
+                          title={savedSplCcList.length === 0 ? "No SPL CC comments saved yet" : "Download saved comments as Excel file"}
+                        >
+                          <Download size={14} />
+                          <span>Download Excel (.xlsx)</span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
 
-                  {pwdChangeError && (
-                    <p className="text-xs text-red-600 font-medium">{pwdChangeError}</p>
-                  )}
-                  {pwdChangeSuccess && (
-                    <p className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                      <Check size={12} strokeWidth={3} />
-                      <span>{pwdChangeSuccess}</span>
-                    </p>
-                  )}
+                    {exportNotice && (
+                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800 flex items-center gap-2 animate-in fade-in duration-200">
+                        <Check size={14} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
+                        <span>{exportNotice}</span>
+                      </div>
+                    )}
 
-                  <div className="flex justify-end pt-1">
-                    <button
-                      type="submit"
-                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg shadow-2xs transition-colors"
-                    >
-                      Update Password
-                    </button>
+                    {/* Filter and Cards List */}
+                    {savedSplCcList.length > 0 ? (
+                      <div className="space-y-3">
+                        <div className="relative">
+                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={splCcSearch}
+                            onChange={(e) => setSplCcSearch(e.target.value)}
+                            placeholder="Filter by customer name, address, country, RPL names, or comment text..."
+                            className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-slate-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 shadow-2xs"
+                          />
+                        </div>
+
+                        <div className="max-h-72 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
+                          {savedSplCcList
+                            .filter(item => {
+                              if (!splCcSearch.trim()) return true;
+                              const q = splCcSearch.toLowerCase();
+                              return (
+                                (item.customerName || '').toLowerCase().includes(q) ||
+                                (item.address || '').toLowerCase().includes(q) ||
+                                (item.country || '').toLowerCase().includes(q) ||
+                                (item.rplNames || '').toLowerCase().includes(q) ||
+                                (item.comments || '').toLowerCase().includes(q) ||
+                                (item.posnr || '').toLowerCase().includes(q)
+                              );
+                            })
+                            .map((item) => (
+                              <div 
+                                key={item.id} 
+                                className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-slate-300 transition-all text-xs space-y-2"
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-bold text-slate-900 text-xs">
+                                      {item.customerName || '[No Customer Name]'}
+                                    </span>
+                                    {item.posnr && (
+                                      <span className="font-mono text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded-md font-semibold">
+                                        #{item.posnr}
+                                      </span>
+                                    )}
+                                    {item.country && (
+                                      <span className="font-bold text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded-md">
+                                        {item.country}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const updated = deleteSavedSplCcComment(item.id);
+                                      setSavedSplCcList(updated);
+                                    }}
+                                    title="Delete this saved comment"
+                                    className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-600">
+                                  {item.address && (
+                                    <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                      <span className="font-semibold text-slate-500 block mb-0.5">Address:</span>
+                                      <span className="text-slate-800 break-words">{item.address}</span>
+                                    </div>
+                                  )}
+
+                                  {item.rplNames && (
+                                    <div className="bg-slate-50/70 p-2 rounded-lg border border-slate-100">
+                                      <span className="font-semibold text-slate-500 block mb-0.5">RPL Names:</span>
+                                      <span className="text-slate-800 italic break-words">{item.rplNames}</span>
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-800 font-mono break-words leading-relaxed">
+                                  {item.comments}
+                                </div>
+
+                                <div className="text-[10px] text-slate-400 text-right">
+                                  Saved on: {item.savedAt}
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-8 text-center rounded-2xl bg-white border border-dashed border-slate-200 space-y-2">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 text-emerald-600 mx-auto flex items-center justify-center">
+                          <FileSpreadsheet size={22} />
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-800">
+                          No Saved SPL CC Comments Yet
+                        </h4>
+                        <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                          In Live Processing, click the bookmark/save icon next to any case comment to archive it here. You can then download all records as a formatted Excel spreadsheet at any time.
+                        </p>
+                      </div>
+                    )}
+
                   </div>
-                </form>
+                )}
+
+                {/* TAB 2: ACCESS & SECURITY */}
+                {settingsActiveTab === 'security' && (
+                  <div className="space-y-4">
+
+                    {/* Section: Live Processing Password Lock */}
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                            isLiveLockEnabled ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {isLiveLockEnabled ? <Lock size={15} /> : <Unlock size={15} />}
+                          </div>
+                          <div>
+                            <span className="text-xs font-bold text-slate-900 block">
+                              Live Processing Password Lock
+                            </span>
+                            <span className="text-[11px] text-slate-500">
+                              Requires password entry before opening Live Processing
+                            </span>
+                          </div>
+                        </div>
+
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                          isLiveLockEnabled ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          {isLiveLockEnabled ? (isLiveUnlocked ? 'Enabled (Unlocked)' : 'Locked') : 'Disabled'}
+                        </span>
+                      </div>
+
+                      <form onSubmit={handleToggleLockSetting} className="space-y-3 pt-1">
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="password"
+                            value={settingsTogglePassword}
+                            onChange={(e) => {
+                              setSettingsTogglePassword(e.target.value);
+                              setSettingsToggleError(null);
+                              setSettingsToggleSuccess(null);
+                            }}
+                            placeholder="Enter current password to change lock state..."
+                            className="flex-1 px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                          />
+                          <button
+                            type="submit"
+                            className={`px-4 py-2 text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-2xs ${
+                              isLiveLockEnabled
+                                ? 'bg-slate-800 hover:bg-slate-900 text-white'
+                                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                            }`}
+                          >
+                            {isLiveLockEnabled ? 'Disable Lock' : 'Enable Lock'}
+                          </button>
+                        </div>
+
+                        {isLiveLockEnabled && isLiveUnlocked && (
+                          <div className="flex justify-end pt-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsLiveUnlocked(false);
+                                if (activeTab === 'live_processing') {
+                                  setActiveTab('processor');
+                                }
+                                setSettingsToggleSuccess('Live Processing has been locked.');
+                              }}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-800 cursor-pointer"
+                            >
+                              <Lock size={12} />
+                              <span>Lock Live Processing Now</span>
+                            </button>
+                          </div>
+                        )}
+
+                        {settingsToggleError && (
+                          <p className="text-xs text-rose-600 font-medium">{settingsToggleError}</p>
+                        )}
+                        {settingsToggleSuccess && (
+                          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
+                            <Check size={13} strokeWidth={3} />
+                            <span>{settingsToggleSuccess}</span>
+                          </p>
+                        )}
+                      </form>
+                    </div>
+
+                    {/* Section: Change Password */}
+                    <div className="p-5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3.5">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                          <KeyRound size={15} />
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block">
+                            Change Password
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            Update the unlock password for Live Processing
+                          </span>
+                        </div>
+                      </div>
+
+                      <form onSubmit={handleChangePassword} className="space-y-3 pt-1">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            Current Password
+                          </label>
+                          <input
+                            type="password"
+                            value={currentPwdInput}
+                            onChange={(e) => {
+                              setCurrentPwdInput(e.target.value);
+                              setPwdChangeError(null);
+                              setPwdChangeSuccess(null);
+                            }}
+                            placeholder="Enter current password..."
+                            className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                          />
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              New Password
+                            </label>
+                            <input
+                              type="password"
+                              value={newPwdInput}
+                              onChange={(e) => {
+                                setNewPwdInput(e.target.value);
+                                setPwdChangeError(null);
+                                setPwdChangeSuccess(null);
+                              }}
+                              placeholder="New password..."
+                              className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                              Confirm Password
+                            </label>
+                            <input
+                              type="password"
+                              value={confirmPwdInput}
+                              onChange={(e) => {
+                                setConfirmPwdInput(e.target.value);
+                                setPwdChangeError(null);
+                                setPwdChangeSuccess(null);
+                              }}
+                              placeholder="Confirm new password..."
+                              className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        {pwdChangeError && (
+                          <p className="text-xs text-rose-600 font-medium">{pwdChangeError}</p>
+                        )}
+                        {pwdChangeSuccess && (
+                          <p className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
+                            <Check size={13} strokeWidth={3} />
+                            <span>{pwdChangeSuccess}</span>
+                          </p>
+                        )}
+
+                        <div className="flex justify-end pt-1">
+                          <button
+                            type="submit"
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-2xs transition-colors cursor-pointer"
+                          >
+                            Update Password
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                  </div>
+                )}
+
               </div>
 
             </div>
