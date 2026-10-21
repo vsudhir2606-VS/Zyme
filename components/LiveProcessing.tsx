@@ -28,7 +28,9 @@ import {
   FileSpreadsheet,
   Sparkles,
   FileText,
-  FileCheck
+  FileCheck,
+  Hash,
+  Copy
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
@@ -680,10 +682,70 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   });
   const [splCcSaveNotice, setSplCcSaveNotice] = useState<string | null>(null);
 
+  // Selected RPL for SPL ID Inspection Modal (Double-click on RPL name)
+  const [inspectingSplRpl, setInspectingSplRpl] = useState<{
+    rpl: LiveRplEntry;
+    splId: string;
+    columnName: string;
+    posnr: string;
+    customerName: string;
+  } | null>(null);
+  const [copiedSplId, setCopiedSplId] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rplListRef = useRef<HTMLDivElement | null>(null);
   const mainWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const commentInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Resolve SPL ID from RPL entry or directly from rawRow matching Excel columns
+  const getSplIdFromRpl = (rpl: LiveRplEntry): { splId: string; columnName: string } => {
+    if (rpl.splId && rpl.splId.trim()) {
+      return { splId: rpl.splId.trim(), columnName: 'SPL ID' };
+    }
+    // Fallback inspection: search rawRow against rawHeaders
+    if (rpl.rawRow && rawHeaders.length > 0) {
+      for (let i = 0; i < rawHeaders.length; i++) {
+        const h = (rawHeaders[i] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if ((h.includes('spl') || h.includes('entityid') || h.includes('sanctionid')) && !h.includes('status') && !h.includes('screening')) {
+          const val = String(rpl.rawRow[i] ?? '').trim();
+          if (val) {
+            return { splId: val, columnName: rawHeaders[i] };
+          }
+        }
+      }
+    }
+    return { splId: rpl.splId || '', columnName: 'SPL ID' };
+  };
+
+  const handleRplDoubleClick = (rpl: LiveRplEntry) => {
+    const info = getSplIdFromRpl(rpl);
+    setInspectingSplRpl({
+      rpl,
+      splId: info.splId,
+      columnName: info.columnName,
+      posnr: activeCase?.posnr || '',
+      customerName: activeCase?.customerName || '',
+    });
+    setCopiedSplId(false);
+  };
+
+  const handleCopySplId = (text: string) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopiedSplId(true);
+    setTimeout(() => setCopiedSplId(false), 2500);
+  };
+
+  // Close SPL ID Inspector on Escape key
+  useEffect(() => {
+    const handleSplModalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && inspectingSplRpl) {
+        setInspectingSplRpl(null);
+      }
+    };
+    window.addEventListener('keydown', handleSplModalKeyDown);
+    return () => window.removeEventListener('keydown', handleSplModalKeyDown);
+  }, [inspectingSplRpl]);
 
   // Sync saved SPL CC list across events (saving in LiveProcessing or modifying in Settings)
   useEffect(() => {
@@ -830,7 +892,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     const cityIdx = findCol(headers, ['city', 'town']);
     const postalCodeIdx = findCol(headers, ['postalcode', 'postcode', 'zip']);
     const typeOfListIdx = findCol(headers, ['typeoflist', 'listtype', 'list']);
-    const splIdIdx = findCol(headers, ['splid', 'spl']);
+    let splIdIdx = findCol(headers, ['splid', 'spl_id', 'splnumber', 'splno', 'splentityid'], ['status', 'screening', 'date', 'score', 'percent', 'action', 'review']);
+    if (splIdIdx === -1) {
+      splIdIdx = findCol(headers, ['spl'], ['status', 'screening', 'date', 'score', 'percent', 'action', 'review', 'partner', 'rpl', 'type', 'list']);
+    }
+    if (splIdIdx === -1) {
+      splIdIdx = findCol(headers, ['entityid', 'sanctionid', 'listid']);
+    }
     const screeningStatusIdx = findCol(headers, ['rplscreeningstatus', 'screeningstatus']);
     const rplStreetIdx = findCol(headers, ['rplstreet1', 'rplstreet']);
     const stateIdx = findCol(headers, ['state', 'region', 'province']);
@@ -2108,25 +2176,52 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             ) : (
                               displayedRplEntries.map((rpl, idx) => {
                                 const isExact = isExact100Match(activeCase.customerName, rpl.rplName);
+                                const splIdVal = rpl.splId || '';
                                 return (
                                   <div 
                                     key={idx}
-                                    className={`p-3 rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 ${
+                                    onDoubleClick={() => handleRplDoubleClick(rpl)}
+                                    className={`p-3 rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none group/rpl ${
                                       isExact 
                                         ? 'border-2 border-red-500 bg-red-50/90 text-red-950 font-bold shadow-2xs ring-1 ring-red-200' 
-                                        : 'border-slate-200 bg-slate-50/60 hover:bg-slate-50 text-slate-900 font-medium'
+                                        : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
                                     }`}
+                                    title="Double-click RPL name to view SPL ID from Excel sheet"
                                   >
-                                    <span className="flex-1 break-words">
-                                      {rpl.rplName || <span className="text-slate-300 italic font-normal">[Blank RPL Name]</span>}
-                                    </span>
-
-                                    {isExact && (
-                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-2xs flex-shrink-0 animate-pulse">
-                                        <AlertCircle size={11} className="text-white" />
-                                        Exact match found
+                                    <div className="flex-1 min-w-[180px] flex items-center gap-2">
+                                      <span 
+                                        onDoubleClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRplDoubleClick(rpl);
+                                        }}
+                                        className="break-words font-semibold group-hover/rpl:text-indigo-950 hover:underline"
+                                      >
+                                        {rpl.rplName || <span className="text-slate-300 italic font-normal">[Blank RPL Name]</span>}
                                       </span>
-                                    )}
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {/* Direct SPL ID button */}
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRplDoubleClick(rpl);
+                                        }}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white hover:bg-indigo-600 hover:text-white text-slate-600 border border-slate-200 shadow-2xs text-[10px] font-bold font-mono transition-all cursor-pointer"
+                                        title="View SPL ID from Excel sheet (or double-click RPL name)"
+                                      >
+                                        <Hash size={11} className="text-indigo-600 group-hover:text-white" />
+                                        <span>{splIdVal ? `SPL: ${splIdVal}` : 'View SPL ID'}</span>
+                                      </button>
+
+                                      {isExact && (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-2xs flex-shrink-0 animate-pulse">
+                                          <AlertCircle size={11} className="text-white" />
+                                          Exact match found
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                 );
                               })
@@ -2339,6 +2434,152 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         </div>
 
       </div>
+
+      {/* SPL ID INSPECTOR MODAL (shown when double-clicking RPL name or clicking SPL ID button) */}
+      {inspectingSplRpl && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setInspectingSplRpl(null)}
+        >
+          <div 
+            className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20">
+                  <Hash size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                    SPL ID Inspector
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Excel sheet record for Posnr #{inspectingSplRpl.posnr}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectingSplRpl(null)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                title="Close (Esc)"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4">
+              {/* Main SPL ID Highlight Box */}
+              <div className="p-4 rounded-2xl bg-gradient-to-br from-indigo-50/80 to-purple-50/50 border border-indigo-200/80 shadow-2xs">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                    SPL ID ({inspectingSplRpl.columnName || 'Excel Column'})
+                  </span>
+                  {inspectingSplRpl.splId ? (
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Found in Sheet
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full border border-amber-200">
+                      Empty in Sheet
+                    </span>
+                  )}
+                </div>
+                
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="font-mono text-xl sm:text-2xl font-black text-slate-900 tracking-tight select-all break-all">
+                    {inspectingSplRpl.splId || (
+                      <span className="text-sm font-semibold italic text-slate-400">
+                        No SPL ID value recorded in this Excel row
+                      </span>
+                    )}
+                  </div>
+
+                  {inspectingSplRpl.splId && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopySplId(inspectingSplRpl.splId)}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                        copiedSplId
+                          ? 'bg-emerald-600 text-white shadow-emerald-500/20'
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white shadow-indigo-500/20 active:scale-95'
+                      }`}
+                    >
+                      {copiedSplId ? (
+                        <>
+                          <Check size={14} strokeWidth={3} />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={14} />
+                          <span>Copy SPL ID</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* RPL Name Card */}
+              <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  RPL Name
+                </span>
+                <p className="text-sm font-bold text-slate-800 break-words">
+                  {inspectingSplRpl.rpl.rplName || '[Blank RPL Name]'}
+                </p>
+              </div>
+
+              {/* Additional Excel Metadata Grid */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-0.5">
+                    Type of List
+                  </span>
+                  <span className="font-semibold text-slate-700">
+                    {inspectingSplRpl.rpl.typeOfList || '—'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-0.5">
+                    Screening Status
+                  </span>
+                  <span className="font-semibold text-slate-700">
+                    {inspectingSplRpl.rpl.rplScreeningStatus || '—'}
+                  </span>
+                </div>
+
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 col-span-2">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-0.5">
+                    RPL Address & Country
+                  </span>
+                  <span className="font-medium text-slate-700">
+                    {[inspectingSplRpl.rpl.rplStreet1 || inspectingSplRpl.rpl.street, inspectingSplRpl.rpl.city, inspectingSplRpl.rpl.country].filter(Boolean).join(', ') || 'No address specified'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between gap-3">
+              <span className="text-[11px] text-slate-400 font-medium">
+                Source: Excel Row #{inspectingSplRpl.rpl.rowIndex + 2}
+              </span>
+              <button
+                type="button"
+                onClick={() => setInspectingSplRpl(null)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
