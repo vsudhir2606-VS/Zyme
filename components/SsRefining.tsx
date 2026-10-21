@@ -336,15 +336,6 @@ export function SsRefining() {
 
         {/* Header Actions */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleLoadSampleData}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl border border-slate-200/80 transition-colors shadow-2xs cursor-pointer"
-            title="Load sample test data to test comparison"
-          >
-            <Sparkles size={13} className="text-indigo-600" />
-            <span>Load Sample Data</span>
-          </button>
-          
           {(totalRawText || existingRawText) && (
             <button
               onClick={() => {
@@ -835,13 +826,6 @@ export function SsRefining() {
               Paste the total file reference numbers in Box 1, and your existing reference numbers in Box 2. The system will automatically compare them and display all reference numbers that are missing.
             </p>
           </div>
-          <button
-            onClick={handleLoadSampleData}
-            className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-2xs transition-colors cursor-pointer"
-          >
-            <Sparkles size={13} />
-            <span>Try with Sample Data</span>
-          </button>
         </div>
       )}
 

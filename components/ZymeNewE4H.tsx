@@ -318,22 +318,10 @@ export const ZymeNewE4H: React.FC = () => {
             </p>
 
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-semibold rounded-xl border border-slate-200">
-                <FileSpreadsheet size={14} className="text-indigo-600" />
+              <span className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-50 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 shadow-2xs">
+                <FileSpreadsheet size={15} className="text-indigo-600" />
                 <span>Select File from Computer</span>
               </span>
-
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleLoadSampleFile();
-                }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold rounded-xl border border-amber-200 transition-colors shadow-2xs"
-              >
-                <Sparkles size={14} className="text-amber-600" />
-                <span>Try Sample E4H Dataset</span>
-              </button>
             </div>
           </div>
         ) : (
@@ -603,7 +591,7 @@ export const ZymeNewE4H: React.FC = () => {
                 {result.headers.length}
               </p>
               <p className="text-[11px] text-slate-500 font-semibold mt-1">
-                {outputFormat === 'all_columns' ? 'Full Data Sheet' : 'Customer + RPL'}
+                {outputFormat === 'all_columns' ? 'All Original Columns' : 'Customer + RPL'}
               </p>
             </div>
           </div>

@@ -5,7 +5,6 @@ import { Processor } from './components/Processor.tsx';
 import { LiveProcessing } from './components/LiveProcessing.tsx';
 import { Consolidator } from './components/Consolidator.tsx';
 import { OofConsolidator } from './components/OofConsolidator.tsx';
-import { DataSheet } from './components/DataSheet.tsx';
 import { SsRefining } from './components/SsRefining.tsx';
 import { getReferenceData, saveReferenceData, clearReferenceData } from './utils/db.ts';
 import { 
@@ -13,6 +12,8 @@ import {
   deleteSavedSplCcComment, 
   clearAllSavedSplCcComments, 
   exportSplCcCommentsToExcel, 
+  importSplCcCommentsFromExcel,
+  syncSplCcStorageWithServer,
   SavedSplCcComment 
 } from './utils/splCcStorage.ts';
 
@@ -27,7 +28,7 @@ const DEFAULT_RISK_KEYWORDS = [
   'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII'
 ];
 
-type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'datasheet' | 'ss_refining';
+type AppTab = 'processor' | 'live_processing' | 'consolidator' | 'oof_consolidator' | 'inventory' | 'ss_refining';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('processor');
@@ -87,9 +88,17 @@ export default function App() {
       return [];
     }
   });
-  const [splCcSearch, setSplCcSearch] = useState<string>('');
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [settingsActiveTab, setSettingsActiveTab] = useState<'splcc' | 'security'>('splcc');
+
+  // Load and sync saved SPL CC list from server and storage on startup so comments are never lost on refresh or update
+  useEffect(() => {
+    syncSplCcStorageWithServer().then(list => {
+      if (list && list.length > 0) {
+        setSavedSplCcList(list);
+      }
+    });
+  }, []);
 
   // Sync saved SPL CC list whenever updated
   useEffect(() => {
@@ -364,13 +373,6 @@ export default function App() {
                 NEW
               </span>
             </button>
-            <button 
-              onClick={() => setActiveTab('datasheet')}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 ${activeTab === 'datasheet' ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shadow-lg shadow-indigo-500/5' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/40 border border-transparent'}`}
-            >
-              <Table size={18} />
-              <span className="text-sm font-semibold">Data Sheet</span>
-            </button>
           </div>
 
           <p className="px-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest mb-2">Configuration</p>
@@ -504,9 +506,7 @@ export default function App() {
                   ? 'Off Consolidation'
                   : activeTab === 'inventory' 
                   ? 'Inventory Reporting' 
-                  : activeTab === 'ss_refining'
-                  ? 'SS Refining'
-                  : 'Data Sheet'}
+                  : 'SS Refining'}
               </h2>
               {activeTab === 'live_processing' && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-violet-600 text-white shadow-2xs">
@@ -524,9 +524,7 @@ export default function App() {
                   ? 'Consolidate reports and attach source file name in Column A for all rows'
                   : activeTab === 'inventory'
                   ? 'Generate daily inventory status comments from Excel files'
-                  : activeTab === 'ss_refining'
-                  ? 'Reconcile total reference numbers against existing references to identify missing records'
-                  : 'Upload global customer mappings to enrich your compliance sheet Column V'}
+                  : 'Reconcile total reference numbers against existing references to identify missing records'}
               </p>
             )}
           </div>
@@ -575,46 +573,8 @@ export default function App() {
           <OofConsolidator />
         ) : activeTab === 'inventory' ? (
           <InventoryReport />
-        ) : activeTab === 'ss_refining' ? (
-          <SsRefining />
         ) : (
-          <DataSheet 
-            onDataLoaded={async (data, name) => {
-              setReferenceData(data);
-              setReferenceFileName(name);
-              if (data && name) {
-                try {
-                  // Save to IndexedDB (local browser cache)
-                  await saveReferenceData(data, name);
-
-                  // Commit to server-side filesystem (perm-preset)
-                  await fetch('/api/save-datasheet', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ referenceData: data, referenceFileName: name })
-                  });
-                } catch (err) {
-                  console.error("Failed to save background reference data in IndexedDB/API:", err);
-                }
-              } else {
-                try {
-                  // Clear IndexedDB
-                  await clearReferenceData();
-
-                  // Clear server-side preset
-                  await fetch('/api/save-datasheet', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ referenceData: null, referenceFileName: null })
-                  });
-                } catch (err) {
-                  console.error("Failed to clear background reference data from IndexedDB/API:", err);
-                }
-              }
-            }}
-            referenceData={referenceData}
-            referenceFileName={referenceFileName}
-          />
+          <SsRefining />
         )}
 
         {/* UNLOCK LIVE PROCESSING MODAL */}
@@ -806,14 +766,14 @@ export default function App() {
                     <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-between gap-3 flex-wrap">
                       <div>
                         <h4 className="text-sm font-bold text-slate-900">
-                          Excel Spreadsheet Export
+                          SPL CC Comments Archive
                         </h4>
                         <p className="text-xs text-slate-500 mt-0.5">
-                          Includes Customer Name, Address & Country with RPL Names & Comments
+                          Customer Name, Address & Country with RPL Names & Comments
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {savedSplCcList.length > 0 && (
                           <button
                             type="button"
@@ -826,9 +786,34 @@ export default function App() {
                             className="inline-flex items-center gap-1 px-3 py-2 text-xs text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-xl transition-colors font-medium cursor-pointer"
                           >
                             <Trash2 size={13} />
-                            <span>Clear Archive</span>
+                            <span>Clear</span>
                           </button>
                         )}
+
+                        <label className="inline-flex items-center gap-2 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 transition-all cursor-pointer">
+                          <Upload size={14} />
+                          <span>Update from Excel (.xlsx)</span>
+                          <input 
+                            type="file"
+                            accept=".xlsx, .xls, .csv"
+                            className="hidden"
+                            onChange={async (e) => {
+                              const file = e.target.files?.[0];
+                              if (!file) return;
+                              try {
+                                const { count, updated } = await importSplCcCommentsFromExcel(file);
+                                setSavedSplCcList(updated);
+                                setExportNotice(`Archive updated: ${count} comments imported from Excel!`);
+                                setTimeout(() => setExportNotice(null), 4000);
+                              } catch (err: any) {
+                                console.error(err);
+                                setExportNotice('Failed to import Excel file. Please check format.');
+                                setTimeout(() => setExportNotice(null), 4000);
+                              }
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
 
                         <button
                           type="button"
@@ -857,35 +842,11 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Filter and Cards List */}
+                    {/* Cards List (Search removed as requested, direct listing) */}
                     {savedSplCcList.length > 0 ? (
                       <div className="space-y-3">
-                        <div className="relative">
-                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                          <input
-                            type="text"
-                            value={splCcSearch}
-                            onChange={(e) => setSplCcSearch(e.target.value)}
-                            placeholder="Filter by customer name, address, country, RPL names, or comment text..."
-                            className="w-full pl-8 pr-3 py-2 text-xs bg-white border border-slate-200 rounded-xl text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 shadow-2xs"
-                          />
-                        </div>
-
                         <div className="max-h-72 overflow-y-auto space-y-2.5 pr-1 scrollbar-thin">
-                          {savedSplCcList
-                            .filter(item => {
-                              if (!splCcSearch.trim()) return true;
-                              const q = splCcSearch.toLowerCase();
-                              return (
-                                (item.customerName || '').toLowerCase().includes(q) ||
-                                (item.address || '').toLowerCase().includes(q) ||
-                                (item.country || '').toLowerCase().includes(q) ||
-                                (item.rplNames || '').toLowerCase().includes(q) ||
-                                (item.comments || '').toLowerCase().includes(q) ||
-                                (item.posnr || '').toLowerCase().includes(q)
-                              );
-                            })
-                            .map((item) => (
+                          {savedSplCcList.map((item) => (
                               <div 
                                 key={item.id} 
                                 className="p-3.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xs hover:border-slate-300 transition-all text-xs space-y-2"
@@ -948,14 +909,14 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="p-8 text-center rounded-2xl bg-white border border-dashed border-slate-200 space-y-2">
-                        <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-100 text-emerald-600 mx-auto flex items-center justify-center">
+                        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 mx-auto flex items-center justify-center">
                           <FileSpreadsheet size={22} />
                         </div>
                         <h4 className="text-sm font-bold text-slate-800">
-                          No Saved SPL CC Comments Yet
+                          No Saved SPL CC Comments in Archive
                         </h4>
-                        <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-                          In Live Processing, click the bookmark/save icon next to any case comment to archive it here. You can then download all records as a formatted Excel spreadsheet at any time.
+                        <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+                          Click "Update from Excel" above to upload your existing comments file, or save comments directly from Live Processing.
                         </p>
                       </div>
                     )}

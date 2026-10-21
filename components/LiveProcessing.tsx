@@ -32,15 +32,21 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
-import { saveSplCcComment, getSavedSplCcComments, SavedSplCcComment } from '../utils/splCcStorage.ts';
+import { 
+  saveSplCcComment, 
+  getSavedSplCcComments, 
+  syncSplCcStorageWithServer, 
+  SavedSplCcComment 
+} from '../utils/splCcStorage.ts';
 
 export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
 
 export type LiveActionType = 
   | 'SPLF'
-  | 'SPLF I vs D'
   | 'SPLF DC'
   | 'SPLF CC'
+  | 'SPLF Ind'
+  | 'SPLF I vs D'
   | 'SPLF(CC)'
   | 'No add'
   | 'SPLE'
@@ -78,21 +84,9 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     },
   },
   {
-    key: 'SPLF I vs D',
-    label: 'SPLF I vs D',
-    shortcut: '2',
-    description: 'SPLF Individual vs Denial',
-    colorTheme: {
-      badge: 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold',
-      normal: 'hover:border-emerald-500 hover:bg-emerald-50 text-emerald-900 border-emerald-300 bg-emerald-50/40',
-      active: 'bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-300 shadow-sm',
-      dot: 'bg-emerald-500',
-    },
-  },
-  {
     key: 'SPLF DC',
     label: 'SPLF DC',
-    shortcut: '3',
+    shortcut: '2',
     description: 'SPLF Different Country / Entity',
     colorTheme: {
       badge: 'bg-teal-100 text-teal-900 border-teal-300 font-bold',
@@ -104,13 +98,25 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'SPLF CC',
     label: 'SPLF CC',
-    shortcut: '4',
+    shortcut: '3',
     description: 'Comprehensive comment (Customer and RPL are different)',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
       normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
       active: 'bg-green-600 text-white border-green-700 ring-2 ring-green-300 shadow-sm',
       dot: 'bg-green-500',
+    },
+  },
+  {
+    key: 'SPLF Ind',
+    label: 'SPLF Ind',
+    shortcut: '4',
+    description: 'SPLF Individual vs Denial',
+    colorTheme: {
+      badge: 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold',
+      normal: 'hover:border-emerald-500 hover:bg-emerald-50 text-emerald-900 border-emerald-300 bg-emerald-50/40',
+      active: 'bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-300 shadow-sm',
+      dot: 'bg-emerald-500',
     },
   },
   {
@@ -681,6 +687,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   // Sync saved SPL CC list across events (saving in LiveProcessing or modifying in Settings)
   useEffect(() => {
+    // Initial sync from server & IndexedDB
+    syncSplCcStorageWithServer().then(list => {
+      if (list && list.length > 0) {
+        setSavedCommentsList(list);
+      }
+    }).catch(() => {});
+
     const handleSplCcUpdate = () => {
       try {
         setSavedCommentsList(getSavedSplCcComments());
@@ -1144,14 +1157,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const matchedSavedComment = useMemo(() => {
     if (!activeCase || !activeCase.customerName?.trim() || savedCommentsList.length === 0) return null;
     
-    // Normalize string: trim, lower case, collapse multiple whitespace
-    const cleanStr = (s?: string) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    // Normalize string: trim, lower case, strip non-alphanumeric, collapse whitespace
+    const cleanStr = (s?: string) => (s || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     
     const curName = cleanStr(activeCase.customerName);
     const curAddr = cleanStr(
       [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode]
         .filter(Boolean)
-        .join(', ')
+        .join(' ')
     );
 
     // Look for exact match on both Customer Name and Address
@@ -1167,8 +1184,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       }
 
       // If neither has address (or 'no add')
-      const isCurNoAdd = !curAddr || curAddr === 'no add';
-      const isSavedNoAdd = !savedAddr || savedAddr === 'no add';
+      const isCurNoAdd = !curAddr || curAddr.includes('no add');
+      const isSavedNoAdd = !savedAddr || savedAddr.includes('no add');
       return isCurNoAdd && isSavedNoAdd;
     });
 
@@ -1188,6 +1205,45 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   const SPLF_CC_DEFAULT_TEXT = "SPLF - False SPL Match- Customer and RPL are different.customer -   , RPL - ";
 
+  // Apply matched comment, automatically mark as SPLF CC, and immediately change to next order
+  const handleInsertMatchAndNext = () => {
+    if (!activeCase || !matchedSavedComment) return;
+    const targetCaseId = activeCase.caseId;
+    const commentText = matchedSavedComment.comments;
+
+    // 1. Determine next case ID BEFORE state update
+    const curIdx = navigationList.findIndex(c => c.caseId === targetCaseId);
+    let nextCaseId: string | null = null;
+    if (curIdx >= 0 && curIdx < navigationList.length - 1) {
+      nextCaseId = navigationList[curIdx + 1].caseId;
+    } else if (cases.length > 1) {
+      const allIdx = cases.findIndex(c => c.caseId === targetCaseId);
+      if (allIdx >= 0 && allIdx < cases.length - 1) {
+        nextCaseId = cases[allIdx + 1].caseId;
+      }
+    }
+
+    // 2. Set note text in state
+    setCaseNote(commentText);
+
+    // 3. Mark as SPLF CC with comment & timestamp
+    setCases(prev => prev.map(c => c.caseId === targetCaseId ? {
+      ...c,
+      action: 'SPLF CC',
+      notes: commentText,
+      actionTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    } : c));
+
+    setSplCcSaveNotice('Marked as SPL CC with matched comment & changed to next!');
+    setTimeout(() => setSplCcSaveNotice(null), 3000);
+
+    // 4. Immediately advance to next order
+    if (nextCaseId) {
+      resetScrollToTop();
+      setActiveCaseId(nextCaseId);
+    }
+  };
+
   // Action assignment
   const handleApplyAction = (actionKey: LiveActionType) => {
     if (!activeCase) return;
@@ -1197,11 +1253,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     let noteToApply = caseNote;
 
     if (isSplfCc) {
-      if (!caseNote || !caseNote.trim() || !caseNote.includes('Customer and RPL are different')) {
+      if (matchedSavedComment && (!caseNote || !caseNote.trim() || caseNote === SPLF_CC_DEFAULT_TEXT)) {
+        noteToApply = matchedSavedComment.comments;
+      } else if (!caseNote || !caseNote.trim() || !caseNote.includes('Customer and RPL are different')) {
         noteToApply = SPLF_CC_DEFAULT_TEXT;
       }
       setCaseNote(noteToApply);
     }
+
+    // Pre-calculate next case ID for autoAdvance before mutating cases state
+    const curIdx = navigationList.findIndex(c => c.caseId === targetCaseId);
+    const nextPending = navigationList.slice(curIdx + 1).find(c => c.action === null);
+    const nextSequential = (curIdx >= 0 && curIdx < navigationList.length - 1) ? navigationList[curIdx + 1] : null;
+    const targetNextId = nextPending?.caseId || nextSequential?.caseId || null;
 
     setCases(prev => {
       return prev.map(c => {
@@ -1234,17 +1298,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       return; // Do not auto-advance away
     }
 
-    if (autoAdvance) {
+    if (autoAdvance && targetNextId) {
       setTimeout(() => {
-        const curIdx = navigationList.findIndex(c => c.caseId === targetCaseId);
-        // Find next pending item in the current navigation list
-        const nextPending = navigationList.slice(curIdx + 1).find(c => c.action === null);
-        if (nextPending) {
-          setActiveCaseId(nextPending.caseId);
-        } else if (curIdx >= 0 && curIdx < navigationList.length - 1) {
-          setActiveCaseId(navigationList[curIdx + 1].caseId);
-        }
-      }, 120);
+        resetScrollToTop();
+        setActiveCaseId(targetNextId);
+      }, 100);
     }
   };
 
@@ -1891,6 +1949,17 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                         Status: {activeCase.status}
                                       </span>
                                     )}
+                                    {matchedSavedComment && (
+                                      <button
+                                        type="button"
+                                        onClick={handleInsertMatchAndNext}
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-400 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 text-xs font-bold shadow-2xs transition-all cursor-pointer group animate-green-pulse"
+                                        title={`Exact Name & Address match found in saved archive!\nClick to mark SPLF CC with saved comment and advance to next order:\n"${matchedSavedComment.comments}"`}
+                                      >
+                                        <MessageSquarePlus size={13} className="text-emerald-700 group-hover:scale-110 transition-transform" />
+                                        <span>Exact Match — Click to Insert & Mark SPL CC</span>
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -2105,6 +2174,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   {btn.description}
                                 </span>
 
+                                {btn.key === 'SPLF CC' && matchedSavedComment && (
+                                  <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full text-[8px] font-black bg-emerald-500 text-white uppercase shadow-xs flex items-center gap-0.5 tracking-wider pointer-events-none">
+                                    Match
+                                  </span>
+                                )}
+
                                 {isSelected && (
                                   <div className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-white text-slate-900 flex items-center justify-center shadow-2xs">
                                     <Check size={8} strokeWidth={3} />
@@ -2144,20 +2219,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             {matchedSavedComment && (
                               <button
                                 type="button"
-                                onClick={() => {
-                                  handleNoteChange(matchedSavedComment.comments);
-                                  setSplCcSaveNotice('Matched comment inserted from saved archive!');
-                                  setTimeout(() => setSplCcSaveNotice(null), 3000);
-                                  setTimeout(() => {
-                                    commentInputRef.current?.focus();
-                                  }, 50);
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 shadow-2xs transition-all cursor-pointer group"
-                                title={`Exact match on Customer Name & Address found in saved archive!\nClick to insert saved comment: "${matchedSavedComment.comments}"`}
-                                aria-label="Insert matched comment"
+                                onClick={handleInsertMatchAndNext}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-400 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 shadow-2xs transition-all cursor-pointer group animate-green-pulse"
+                                title={`Exact match on Customer Name & Address found in saved archive!\nClick to mark SPLF CC with this comment and advance to next order:\n"${matchedSavedComment.comments}"`}
+                                aria-label="Insert matched comment, mark SPLF CC and move to next"
                               >
-                                <MessageSquarePlus size={14} className="text-amber-700 group-hover:scale-110 transition-transform" />
-                                <span className="text-[10px] font-bold text-amber-800 hidden sm:inline">Insert Match</span>
+                                <MessageSquarePlus size={14} className="text-emerald-700 group-hover:scale-110 transition-transform" />
+                                <span className="text-[10px] font-bold text-emerald-900 hidden sm:inline">Insert Match (SPL CC & Next)</span>
                               </button>
                             )}
 

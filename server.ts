@@ -56,6 +56,39 @@ async function startServer() {
     }
   });
 
+  // API endpoint to save SPL CC comments archive to persistent filesystem
+  app.post("/api/save-splcc", (req, res) => {
+    try {
+      const { comments } = req.body;
+      const utilsDir = path.join(process.cwd(), "utils");
+      if (!fs.existsSync(utilsDir)) {
+        fs.mkdirSync(utilsDir, { recursive: true });
+      }
+      const filePath = path.join(utilsDir, "savedSplCcComments.json");
+      fs.writeFileSync(filePath, JSON.stringify(comments || [], null, 2), "utf-8");
+      res.json({ success: true, count: Array.isArray(comments) ? comments.length : 0 });
+    } catch (err: any) {
+      console.error("Failed to save SPL CC comments to disk:", err);
+      res.status(500).json({ error: err.message || "Failed to save SPL CC comments" });
+    }
+  });
+
+  // API endpoint to retrieve SPL CC comments archive
+  app.get("/api/get-splcc", (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), "utils", "savedSplCcComments.json");
+      if (fs.existsSync(filePath)) {
+        const fileContent = fs.readFileSync(filePath, "utf-8");
+        res.json({ comments: JSON.parse(fileContent) });
+      } else {
+        res.json({ comments: [] });
+      }
+    } catch (err: any) {
+      console.error("Failed to read SPL CC comments from disk:", err);
+      res.status(500).json({ error: err.message || "Failed to read SPL CC comments" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

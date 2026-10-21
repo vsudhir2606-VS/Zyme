@@ -1,6 +1,7 @@
 const DB_NAME = "zyme_db";
 const STORE_NAME = "reference_store";
-const DB_VERSION = 1;
+const SPLCC_STORE_NAME = "splcc_comments_store";
+const DB_VERSION = 2;
 
 export function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -11,6 +12,9 @@ export function openDB(): Promise<IDBDatabase> {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(SPLCC_STORE_NAME)) {
+        db.createObjectStore(SPLCC_STORE_NAME);
       }
     };
   });
@@ -76,5 +80,39 @@ export async function clearReferenceData(): Promise<void> {
     });
   } catch (error) {
     console.error("Failed to clear IndexedDB", error);
+  }
+}
+
+export async function saveSplCcCommentsToDB(comments: any[]): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise<void>((resolve, reject) => {
+      const transaction = db.transaction(SPLCC_STORE_NAME, "readwrite");
+      const store = transaction.objectStore(SPLCC_STORE_NAME);
+      store.put(comments, "all_comments");
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+  } catch (err) {
+    console.warn("Failed to save SPL CC comments to IndexedDB", err);
+  }
+}
+
+export async function getSplCcCommentsFromDB(): Promise<any[]> {
+  try {
+    const db = await openDB();
+    return new Promise<any[]>((resolve, reject) => {
+      const transaction = db.transaction(SPLCC_STORE_NAME, "readonly");
+      const store = transaction.objectStore(SPLCC_STORE_NAME);
+      const req = store.get("all_comments");
+      req.onsuccess = () => {
+        const val = req.result;
+        resolve(Array.isArray(val) ? val : []);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn("Failed to load SPL CC comments from IndexedDB", err);
+    return [];
   }
 }
