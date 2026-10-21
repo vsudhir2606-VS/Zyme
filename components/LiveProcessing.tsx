@@ -681,6 +681,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   });
   const [splCcSaveNotice, setSplCcSaveNotice] = useState<string | null>(null);
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Selected RPL for SPL ID Inspection Modal (Double-click on RPL name)
   const [inspectingSplRpl, setInspectingSplRpl] = useState<{
@@ -689,8 +691,14 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     columnName: string;
     posnr: string;
     customerName: string;
+    customerAddress: string;
+    customerCountry: string;
+    partnerId?: string;
+    status?: string;
   } | null>(null);
   const [copiedSplId, setCopiedSplId] = useState(false);
+  const [copiedRplText, setCopiedRplText] = useState<string | null>(null);
+  const [copiedCustomerText, setCopiedCustomerText] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const rplListRef = useRef<HTMLDivElement | null>(null);
@@ -719,12 +727,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   const handleRplDoubleClick = (rpl: LiveRplEntry) => {
     const info = getSplIdFromRpl(rpl);
+    const custAddr = activeCase 
+      ? [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ')
+      : '';
     setInspectingSplRpl({
       rpl,
       splId: info.splId,
       columnName: info.columnName,
       posnr: activeCase?.posnr || '',
       customerName: activeCase?.customerName || '',
+      customerAddress: custAddr || (activeCase?.isNoAdd ? 'NO add (Blank)' : 'No address specified'),
+      customerCountry: activeCase?.country || '',
+      partnerId: activeCase?.partnerId || '',
+      status: activeCase?.status || '',
     });
     setCopiedSplId(false);
   };
@@ -734,6 +749,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     navigator.clipboard?.writeText(text);
     setCopiedSplId(true);
     setTimeout(() => setCopiedSplId(false), 2500);
+  };
+
+  const handleCopyText = (text: string, type: 'customer' | 'rpl') => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    if (type === 'customer') {
+      setCopiedCustomerText(true);
+      setTimeout(() => setCopiedCustomerText(false), 2000);
+    } else {
+      setCopiedRplText(text);
+      setTimeout(() => setCopiedRplText(null), 2000);
+    }
   };
 
   // Close SPL ID Inspector on Escape key
@@ -1176,20 +1203,24 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   };
 
-  // Save current case's SPL CC comment to persistent storage (downloadable in Settings)
-  const handleSaveCurrentSplCcComment = () => {
-    if (!activeCase) return;
-    const commentText = caseNote.trim() || activeCase.notes.trim() || SPLF_CC_DEFAULT_TEXT;
-    const addressStr = [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ') || 'NO add';
-    const rplNamesStr = activeCase.rplEntries.map(e => e.rplName).filter(Boolean).join('; ') || 'None';
+  const SPLF_CC_DEFAULT_TEXT = "SPLF - False SPL Match- Customer and RPL are different.customer -   , RPL - ";
+
+  // Core save function to persist comments for a case to repository & server
+  const persistCaseComment = (noteText: string, targetCase: LiveProcessingCase | null, silent = false) => {
+    if (!targetCase) return;
+    const trimmed = noteText.trim();
+    if (!trimmed) return;
+
+    const addressStr = [targetCase.street, targetCase.city, targetCase.state, targetCase.postalCode].filter(Boolean).join(', ') || 'NO add';
+    const rplNamesStr = targetCase.rplEntries.map(e => e.rplName).filter(Boolean).join('; ') || 'None';
 
     const result = saveSplCcComment({
-      posnr: activeCase.posnr,
-      customerName: activeCase.customerName || `Customer (Posnr ${activeCase.posnr})`,
+      posnr: targetCase.posnr,
+      customerName: targetCase.customerName || `Customer (Posnr ${targetCase.posnr})`,
       address: addressStr,
-      country: activeCase.country || '',
+      country: targetCase.country || '',
       rplNames: rplNamesStr,
-      comments: commentText,
+      comments: trimmed,
     });
 
     try {
@@ -1197,10 +1228,25 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     } catch {
       // no-op
     }
-    setSplCcSaveNotice(result.isUpdate ? 'SPL CC comment updated!' : 'SPL CC comment saved!');
-    setTimeout(() => {
-      setSplCcSaveNotice(null);
-    }, 3000);
+
+    if (silent) {
+      setAutoSaveStatus('saved');
+      setTimeout(() => {
+        setAutoSaveStatus('idle');
+      }, 2500);
+    } else {
+      setSplCcSaveNotice(result.isUpdate ? 'SPL CC comment updated!' : 'SPL CC comment saved!');
+      setTimeout(() => {
+        setSplCcSaveNotice(null);
+      }, 3000);
+    }
+  };
+
+  // Save current case's SPL CC comment to persistent storage (downloadable in Settings)
+  const handleSaveCurrentSplCcComment = () => {
+    if (!activeCase) return;
+    const commentText = caseNote.trim() || activeCase.notes.trim() || SPLF_CC_DEFAULT_TEXT;
+    persistCaseComment(commentText, activeCase, false);
   };
 
   // Filtered RPL entries for active case based on rplSearchQuery
@@ -1260,7 +1306,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     return found || null;
   }, [activeCase, savedCommentsList]);
 
-  // Handle note/comment change reactively so it updates case instantly
+  // Handle note/comment change reactively so it updates case instantly and auto-saves
   const handleNoteChange = (newNote: string) => {
     setCaseNote(newNote);
     if (!activeCase) return;
@@ -1269,9 +1315,20 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       ...c,
       notes: newNote,
     } : c));
-  };
 
-  const SPLF_CC_DEFAULT_TEXT = "SPLF - False SPL Match- Customer and RPL are different.customer -   , RPL - ";
+    // Auto-save comment to persistent archive
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
+    if (newNote.trim()) {
+      setAutoSaveStatus('saving');
+      autoSaveTimerRef.current = setTimeout(() => {
+        persistCaseComment(newNote, activeCase, true);
+      }, 600);
+    } else {
+      setAutoSaveStatus('idle');
+    }
+  };
 
   // Apply matched comment, automatically mark as SPLF CC, and immediately change to next order
   const handleInsertMatchAndNext = () => {
@@ -1291,8 +1348,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       }
     }
 
-    // 2. Set note text in state
+    // 2. Set note text in state & auto-save
     setCaseNote(commentText);
+    persistCaseComment(commentText, activeCase, true);
 
     // 3. Mark as SPLF CC with comment & timestamp
     setCases(prev => prev.map(c => c.caseId === targetCaseId ? {
@@ -1327,6 +1385,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         noteToApply = SPLF_CC_DEFAULT_TEXT;
       }
       setCaseNote(noteToApply);
+      persistCaseComment(noteToApply, activeCase, true);
     }
 
     // Pre-calculate next case ID for autoAdvance before mutating cases state
@@ -1418,7 +1477,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   // Sync current case note
   useEffect(() => {
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+    }
     setCaseNote(activeCase?.notes || '');
+    setAutoSaveStatus('idle');
   }, [activeCase?.caseId, activeCase?.notes]);
 
   // Download reviewed Excel
@@ -2007,26 +2070,39 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                     Customer Name
                                   </label>
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <h2 className={`text-lg sm:text-xl font-bold tracking-tight leading-snug break-words ${boxTheme.nameClass}`}>
+                                    <h2 className={`text-lg sm:text-xl font-bold tracking-tight leading-snug break-words select-text ${boxTheme.nameClass}`}>
                                       {activeCase.customerName || (
                                         <span className="italic text-slate-400 font-normal">[No Customer Name on file]</span>
                                       )}
                                     </h2>
+                                    {activeCase.customerName && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopyText(activeCase.customerName, 'customer')}
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold transition-all cursor-pointer shadow-2xs border ${
+                                          copiedCustomerText
+                                            ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                            : 'bg-white/80 hover:bg-white text-slate-600 hover:text-indigo-600 border-slate-200'
+                                        }`}
+                                        title="Copy Customer Name"
+                                      >
+                                        {copiedCustomerText ? (
+                                          <>
+                                            <Check size={12} strokeWidth={3} className="text-emerald-600" />
+                                            <span className="text-[11px] font-bold">Copied!</span>
+                                          </>
+                                        ) : (
+                                          <>
+                                            <Copy size={12} />
+                                            <span className="text-[11px]">Copy</span>
+                                          </>
+                                        )}
+                                      </button>
+                                    )}
                                     {activeCase.status && (
                                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold border shadow-2xs flex-shrink-0 ${boxTheme.statusBadgeClass}`}>
                                         Status: {activeCase.status}
                                       </span>
-                                    )}
-                                    {matchedSavedComment && (
-                                      <button
-                                        type="button"
-                                        onClick={handleInsertMatchAndNext}
-                                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-400 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 text-xs font-bold shadow-2xs transition-all cursor-pointer group animate-green-pulse"
-                                        title={`Exact Name & Address match found in saved archive!\nClick to mark SPLF CC with saved comment and advance to next order:\n"${matchedSavedComment.comments}"`}
-                                      >
-                                        <MessageSquarePlus size={13} className="text-emerald-700 group-hover:scale-110 transition-transform" />
-                                        <span>Exact Match — Click to Insert & Mark SPL CC</span>
-                                      </button>
                                     )}
                                   </div>
                                 </div>
@@ -2176,12 +2252,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             ) : (
                               displayedRplEntries.map((rpl, idx) => {
                                 const isExact = isExact100Match(activeCase.customerName, rpl.rplName);
-                                const splIdVal = rpl.splId || '';
                                 return (
                                   <div 
                                     key={idx}
                                     onDoubleClick={() => handleRplDoubleClick(rpl)}
-                                    className={`p-3 rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none group/rpl ${
+                                    className={`p-3 rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 group/rpl ${
                                       isExact 
                                         ? 'border-2 border-red-500 bg-red-50/90 text-red-950 font-bold shadow-2xs ring-1 ring-red-200' 
                                         : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
@@ -2194,27 +2269,41 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                           e.stopPropagation();
                                           handleRplDoubleClick(rpl);
                                         }}
-                                        className="break-words font-semibold group-hover/rpl:text-indigo-950 hover:underline"
+                                        className="break-words font-semibold select-text cursor-text group-hover/rpl:text-indigo-950 hover:underline"
                                       >
                                         {rpl.rplName || <span className="text-slate-300 italic font-normal">[Blank RPL Name]</span>}
                                       </span>
+
+                                      {rpl.rplName && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleCopyText(rpl.rplName, 'rpl');
+                                          }}
+                                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold border transition-all cursor-pointer shadow-2xs flex-shrink-0 ${
+                                            copiedRplText === rpl.rplName
+                                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                              : 'bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border-slate-200'
+                                          }`}
+                                          title="Copy RPL Name"
+                                        >
+                                          {copiedRplText === rpl.rplName ? (
+                                            <>
+                                              <Check size={11} strokeWidth={3} className="text-emerald-600" />
+                                              <span className="font-bold">Copied!</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Copy size={11} />
+                                              <span>Copy</span>
+                                            </>
+                                          )}
+                                        </button>
+                                      )}
                                     </div>
 
                                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                                      {/* Direct SPL ID button */}
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleRplDoubleClick(rpl);
-                                        }}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white hover:bg-indigo-600 hover:text-white text-slate-600 border border-slate-200 shadow-2xs text-[10px] font-bold font-mono transition-all cursor-pointer"
-                                        title="View SPL ID from Excel sheet (or double-click RPL name)"
-                                      >
-                                        <Hash size={11} className="text-indigo-600 group-hover:text-white" />
-                                        <span>{splIdVal ? `SPL: ${splIdVal}` : 'View SPL ID'}</span>
-                                      </button>
-
                                       {isExact && (
                                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-2xs flex-shrink-0 animate-pulse">
                                           <AlertCircle size={11} className="text-white" />
@@ -2289,7 +2378,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       {/* COMMENT BOX & SAVE SPL CC OPTION */}
                       <div className="p-3 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-2 flex-shrink-0">
                         <div className="flex items-center justify-between flex-wrap gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <MessageSquare size={13} className="text-indigo-600" />
                             <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                               Comment
@@ -2303,6 +2392,17 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200 shadow-2xs">
                                 <Sparkles size={11} className="text-amber-600" />
                                 <span>Saved Match Available</span>
+                              </span>
+                            )}
+                            {autoSaveStatus === 'saving' && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 animate-pulse">
+                                <span>Auto-saving...</span>
+                              </span>
+                            )}
+                            {autoSaveStatus === 'saved' && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 animate-in fade-in">
+                                <Check size={11} strokeWidth={3} className="text-emerald-600" />
+                                <span>Auto-saved</span>
                               </span>
                             )}
                           </div>
@@ -2374,6 +2474,14 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             type="text"
                             value={caseNote}
                             onChange={(e) => handleNoteChange(e.target.value)}
+                            onBlur={() => {
+                              if (autoSaveTimerRef.current) {
+                                clearTimeout(autoSaveTimerRef.current);
+                              }
+                              if (caseNote.trim() && activeCase) {
+                                persistCaseComment(caseNote, activeCase, true);
+                              }
+                            }}
                             placeholder="Add comment or custom status..."
                             className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 bg-slate-50/50 hover:bg-white focus:bg-white transition-all text-slate-800 placeholder:text-slate-400"
                           />
@@ -2525,10 +2633,36 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
               {/* RPL Name Card */}
               <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 space-y-1">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  RPL Name
-                </span>
-                <p className="text-sm font-bold text-slate-800 break-words">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    RPL Name
+                  </span>
+                  {inspectingSplRpl.rpl.rplName && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopyText(inspectingSplRpl.rpl.rplName, 'rpl')}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-all cursor-pointer shadow-2xs ${
+                        copiedRplText === inspectingSplRpl.rpl.rplName
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200'
+                      }`}
+                      title="Copy RPL Name"
+                    >
+                      {copiedRplText === inspectingSplRpl.rpl.rplName ? (
+                        <>
+                          <Check size={11} strokeWidth={3} className="text-emerald-600" />
+                          <span className="font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={11} />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <p className="text-sm font-bold text-slate-800 break-words select-text">
                   {inspectingSplRpl.rpl.rplName || '[Blank RPL Name]'}
                 </p>
               </div>
@@ -2553,13 +2687,27 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   </span>
                 </div>
 
-                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/70 col-span-2">
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-0.5">
-                    RPL Address & Country
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70 col-span-2 space-y-1.5">
+                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Customer Data
                   </span>
-                  <span className="font-medium text-slate-700">
-                    {[inspectingSplRpl.rpl.rplStreet1 || inspectingSplRpl.rpl.street, inspectingSplRpl.rpl.city, inspectingSplRpl.rpl.country].filter(Boolean).join(', ') || 'No address specified'}
-                  </span>
+                  <div className="space-y-1">
+                    <p className="font-bold text-slate-900 text-xs">
+                      {inspectingSplRpl.customerName || <span className="text-slate-400 italic">No customer name</span>}
+                    </p>
+                    <p className="font-medium text-slate-700 text-xs">
+                      {[inspectingSplRpl.customerAddress, inspectingSplRpl.customerCountry].filter(Boolean).join(', ') || (
+                        <span className="text-slate-400 italic">No customer address specified</span>
+                      )}
+                    </p>
+                    {(inspectingSplRpl.partnerId || inspectingSplRpl.posnr) && (
+                      <p className="text-[11px] text-slate-500 font-mono">
+                        {inspectingSplRpl.posnr && `Posnr: ${inspectingSplRpl.posnr}`}
+                        {inspectingSplRpl.posnr && inspectingSplRpl.partnerId && ' • '}
+                        {inspectingSplRpl.partnerId && `Partner ID: ${inspectingSplRpl.partnerId}`}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
