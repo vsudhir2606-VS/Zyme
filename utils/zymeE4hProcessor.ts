@@ -17,8 +17,8 @@ export const TARGET_ZYME_E4H_COLUMNS: TargetColumnDef[] = [
   { key: 'country', label: 'Country', colLetter: 'E', defaultHeader: 'Country' },
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'street', label: 'Street', colLetter: 'G', defaultHeader: 'street' },
-  { key: 'rplStreet1', label: 'RPL Street 1', colLetter: 'H', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RPL Street 2', colLetter: 'I', defaultHeader: 'RplStreet1' },
+  { key: 'street2', label: 'Street 2', colLetter: 'H', defaultHeader: 'street' },
+  { key: 'street3', label: 'Street 3', colLetter: 'I', defaultHeader: 'street' },
   { key: 'city', label: 'City', colLetter: 'J', defaultHeader: 'city' },
   { key: 'postalCode', label: 'Postal Code', colLetter: 'K', defaultHeader: 'Postal Code' },
   { key: 'rplName', label: 'RPLname', colLetter: 'L', defaultHeader: 'RPLname' },
@@ -37,8 +37,8 @@ export const TARGET_ZYME_E4H_SHEET2_COLUMNS: TargetColumnDef[] = [
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'match', label: 'Match', colLetter: 'G', defaultHeader: 'match' },
   { key: 'street', label: 'Street', colLetter: 'H', defaultHeader: 'street' },
-  { key: 'rplStreet1', label: 'RPL Street 1', colLetter: 'I', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RPL Street 2', colLetter: 'J', defaultHeader: 'RplStreet1' },
+  { key: 'street2', label: 'Street 2', colLetter: 'I', defaultHeader: 'street' },
+  { key: 'street3', label: 'Street 3', colLetter: 'J', defaultHeader: 'street' },
   { key: 'city', label: 'City', colLetter: 'K', defaultHeader: 'city' },
   { key: 'rplName', label: 'RPLname', colLetter: 'L', defaultHeader: 'RPLname' },
   { key: 'postalCode', label: 'Postal Code', colLetter: 'M', defaultHeader: 'Postal Code' },
@@ -57,6 +57,8 @@ export type TargetColumnKey =
   | 'name'
   | 'match'
   | 'street'
+  | 'street2'
+  | 'street3'
   | 'rplStreet1'
   | 'rplStreet2'
   | 'city'
@@ -86,6 +88,7 @@ export interface ZymeE4hRowAudit {
   match?: string;
   rplName: string;
   typeOfList: string;
+  splId?: string;
   sequenceNo: string;
   status: string;
   isDuplicate: boolean;
@@ -160,6 +163,8 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
     name: -1,
     match: -1,
     street: -1,
+    street2: -1,
+    street3: -1,
     rplStreet1: -1,
     rplStreet2: -1,
     city: -1,
@@ -198,6 +203,8 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
     return -1;
   };
 
+  const categoryExcludes = ['category', 'categ', 'bpcateg', 'bp', 'buspartner', 'partnercategory', 'buspartnercategory'];
+
   // Specific detectors to prevent cross-matching:
 
   // 1. RPL Screening Status (must be matched before generic 'status')
@@ -209,61 +216,67 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
   // 2. RPL Name (must be matched before generic 'name')
   mapping.rplName = matchColumn(
     ['rplname', 'rplentity', 'rplcustomer', 'rplpartner', 'rpllistname', 'rplorg'],
-    []
-  );
-
-  const categoryExcludes = ['category', 'categ', 'bpcateg', 'bp', 'buspartner', 'partnercategory', 'buspartnercategory'];
-
-  // 3. RPL Street 1 & 2 (must be matched before generic 'street')
-  // Exclude Bus.Partner Category and any category variants
-  mapping.rplStreet1 = matchColumn(
-    ['rplstreet1', 'rplstreet', 'rpladdress1', 'rpladdress', 'street2', 'address2'],
-    ['street2', 'address2', ...categoryExcludes]
-  );
-  mapping.rplStreet2 = matchColumn(
-    ['rplstreet2', 'rplstreet12', 'rpladdress2', 'street3', 'address3', 'rplstreet'],
     categoryExcludes
   );
 
-  // 4. Type of List
+  // 3. Customer Street columns: All columns named 'street' / 'address' (Customer details, NOT RPL street)
+  // Strictly exclude 'rpl' and category
+  mapping.street = matchColumn(
+    ['street', 'street1', 'address', 'address1', 'stras', 'streetaddress'],
+    ['rpl', ...categoryExcludes]
+  );
+  mapping.street2 = matchColumn(
+    ['street', 'street2', 'address', 'address2', 'stras2', 'streetaddress2'],
+    ['rpl', ...categoryExcludes]
+  );
+  mapping.street3 = matchColumn(
+    ['street', 'street3', 'address', 'address3', 'stras3', 'streetaddress3'],
+    ['rpl', ...categoryExcludes]
+  );
+
+  // 4. RPL Street 1 & 2 (Sanctioned Party / RPL street address - MUST have 'rpl' in header)
+  mapping.rplStreet1 = matchColumn(
+    ['rplstreet1', 'rplstreet', 'rpladdress1', 'rpladdress'],
+    categoryExcludes
+  );
+  mapping.rplStreet2 = matchColumn(
+    ['rplstreet2', 'rplstreet12', 'rpladdress2'],
+    categoryExcludes
+  );
+
+  // 5. Type of List
   mapping.typeOfList = matchColumn(
     ['typeoflist', 'listtype', 'typelist', 'listcategory', 'listgroup', 'typeoftlist'],
     []
   );
 
-  // 5. Posnr
+  // 6. Posnr
   mapping.posnr = matchColumn(
     ['posnr', 'item', 'position', 'posno', 'posnumber', 'linenumber', 'lineitem', 'pos'],
     []
   );
 
-  // 6. Sequence No
+  // 7. Sequence No
   mapping.sequenceNo = matchColumn(
     ['sequenceno', 'sequencenumber', 'seqno', 'seqnum', 'seqnumber', 'sno', 'seq', 'sequence'],
     []
   );
 
-  // 7. Partner ID (exclude name and category)
+  // 8. Partner ID (exclude name and category)
   mapping.partnerId = matchColumn(
     ['partnerid', 'partner', 'partnerno', 'partnernumber', 'custid', 'customerid', 'vendorid', 'partnerro'],
     ['name', ...categoryExcludes]
   );
 
-  // 8. Country
+  // 9. Country
   mapping.country = matchColumn(
     ['country', 'land', 'countrycode', 'ctry', 'cntry', 'land1', 'countryname'],
     []
   );
 
-  // 9. Generic Name (exclude anything with 'rpl')
+  // 10. Generic Name (exclude anything with 'rpl')
   mapping.name = matchColumn(
     ['name', 'name1', 'customername', 'partnername', 'entityname', 'companyname', 'clientname'],
-    ['rpl', ...categoryExcludes]
-  );
-
-  // 10. Generic Street (exclude anything with 'rpl' and category)
-  mapping.street = matchColumn(
-    ['street', 'street1', 'address', 'stras', 'streetaddress'],
     ['rpl', ...categoryExcludes]
   );
 
@@ -315,6 +328,8 @@ export const findHeaderRow = (rows: any[][]): { headerRowIndex: number; mapping:
     name: -1,
     match: -1,
     street: -1,
+    street2: -1,
+    street3: -1,
     rplStreet1: -1,
     rplStreet2: -1,
     city: -1,
@@ -338,6 +353,7 @@ export const findHeaderRow = (rows: any[][]): { headerRowIndex: number; mapping:
     if (currentMapping.name !== -1) score += 3;
     if (currentMapping.rplName !== -1) score += 3;
     if (currentMapping.typeOfList !== -1) score += 3;
+    if (currentMapping.splId !== -1) score += 3;
     if (currentMapping.sequenceNo !== -1) score += 3;
     // Target sorted columns
     if (currentMapping.status !== -1) score += 2;
@@ -345,11 +361,11 @@ export const findHeaderRow = (rows: any[][]): { headerRowIndex: number; mapping:
     if (currentMapping.country !== -1) score += 2;
     if (currentMapping.city !== -1) score += 2;
     if (currentMapping.street !== -1) score += 2;
-    if (currentMapping.rplStreet1 !== -1) score += 2;
-    if (currentMapping.rplStreet2 !== -1) score += 2;
+    if (currentMapping.street2 !== -1) score += 2;
+    if (currentMapping.street3 !== -1) score += 2;
     if (currentMapping.postalCode !== -1) score += 2;
-    if (currentMapping.splId !== -1) score += 2;
     if (currentMapping.rplScreeningStatus !== -1) score += 2;
+    if (currentMapping.rplStreet1 !== -1) score += 1;
     if (currentMapping.state !== -1) score += 2;
 
     if (score > bestScore) {
@@ -522,6 +538,8 @@ export const processZymeE4hFile = async (
     name: options?.customMapping?.name ?? detectedMapping.name,
     match: options?.customMapping?.match ?? -1,
     street: options?.customMapping?.street ?? detectedMapping.street,
+    street2: options?.customMapping?.street2 ?? detectedMapping.street2,
+    street3: options?.customMapping?.street3 ?? detectedMapping.street3,
     rplStreet1: options?.customMapping?.rplStreet1 ?? detectedMapping.rplStreet1,
     rplStreet2: options?.customMapping?.rplStreet2 ?? detectedMapping.rplStreet2,
     city: options?.customMapping?.city ?? detectedMapping.city,
@@ -596,6 +614,7 @@ export const processZymeE4hFile = async (
   let uniqueRowsKept = 0;
   let nameRetainedCount = 0;
   let nameBlankedCount = 0;
+  let lastSeenPosnr = '';
 
   for (let rIdx = 0; rIdx < dataRows.length; rIdx++) {
     const sourceRow = dataRows[rIdx];
@@ -604,23 +623,32 @@ export const processZymeE4hFile = async (
       continue;
     }
 
-    // Extract values for the 4 duplicate-key columns: Posnr, Name, RPL name, type of list
+    // Extract values for columns: Posnr, Name, RPL name, Type of list, SPL id
     const posnrVal = mapping.posnr >= 0 ? String(sourceRow[mapping.posnr] ?? '').trim() : '';
     const nameVal = mapping.name >= 0 ? String(sourceRow[mapping.name] ?? '').trim() : '';
     const rplNameVal = mapping.rplName >= 0 ? String(sourceRow[mapping.rplName] ?? '').trim() : '';
     const typeOfListVal = mapping.typeOfList >= 0 ? String(sourceRow[mapping.typeOfList] ?? '').trim() : '';
+    const splIdVal = mapping.splId >= 0 ? String(sourceRow[mapping.splId] ?? '').trim() : '';
     const countryVal = mapping.country >= 0 ? String(sourceRow[mapping.country] ?? '').trim() : '';
     const seqNoVal = mapping.sequenceNo >= 0 ? String(sourceRow[mapping.sequenceNo] ?? '').trim() : '';
 
-    // Step A: Duplicate check based on [Posnr, Name, RPL name, type of list]
-    const keyCompPosnr = options?.caseSensitiveDuplicates ? posnrVal : posnrVal.toLowerCase();
-    const keyCompName = options?.caseSensitiveDuplicates ? nameVal : nameVal.toLowerCase();
+    if (posnrVal) {
+      lastSeenPosnr = posnrVal;
+    }
+    const effectivePosnr = posnrVal || lastSeenPosnr;
+
+    // Step A: Duplicate check based on [Posnr, RPL name, Type of list, SPL id]
+    // User requirement: "the duplicates must be removed from columns RPL name, Type of list & SPL id"
+    const keyCompPosnr = options?.caseSensitiveDuplicates ? effectivePosnr : effectivePosnr.toLowerCase();
     const keyCompRpl = options?.caseSensitiveDuplicates ? rplNameVal : rplNameVal.toLowerCase();
     const keyCompType = options?.caseSensitiveDuplicates ? typeOfListVal : typeOfListVal.toLowerCase();
+    const keyCompSpl = options?.caseSensitiveDuplicates ? splIdVal : splIdVal.toLowerCase();
 
-    const duplicateCompositeKey = `${keyCompPosnr}__##__${keyCompName}__##__${keyCompRpl}__##__${keyCompType}`;
+    const duplicateCompositeKey = `${keyCompPosnr}__##__${keyCompRpl}__##__${keyCompType}__##__${keyCompSpl}`;
 
-    if (seenDuplicateKeys.has(duplicateCompositeKey)) {
+    const isDedupeCandidate = Boolean(rplNameVal || typeOfListVal || splIdVal);
+
+    if (isDedupeCandidate && seenDuplicateKeys.has(duplicateCompositeKey)) {
       duplicatesRemoved++;
       duplicateAudit.push({
         rowIndex: headerRowIndex + 1 + rIdx + 1, // 1-indexed sheet row
@@ -628,6 +656,7 @@ export const processZymeE4hFile = async (
         name: nameVal,
         rplName: rplNameVal,
         typeOfList: typeOfListVal,
+        splId: splIdVal,
         sequenceNo: seqNoVal,
         status: '',
         isDuplicate: true,
@@ -637,8 +666,9 @@ export const processZymeE4hFile = async (
       continue; // Remove duplicate row
     }
 
-    // Mark as seen
-    seenDuplicateKeys.add(duplicateCompositeKey);
+    if (isDedupeCandidate) {
+      seenDuplicateKeys.add(duplicateCompositeKey);
+    }
     uniqueRowsKept++;
 
     // Step B: Check Sequence No logic on Name column:
@@ -887,10 +917,10 @@ export const processZymeE4hFile = async (
     sortedRow.push(record.finalNameValue);
     // Target Column G: Street (Customer Street 1)
     sortedRow.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Target Column H: Street 2 (RplStreet1)
-    sortedRow.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Target Column I: Street 3 (RplStreet2)
-    sortedRow.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
+    // Target Column H: Street 2 (Customer Street 2)
+    sortedRow.push(mapping.street2 >= 0 ? (sourceRow[mapping.street2] ?? '') : '');
+    // Target Column I: Street 3 (Customer Street 3)
+    sortedRow.push(mapping.street3 >= 0 ? (sourceRow[mapping.street3] ?? '') : '');
     // Target Column J: City
     sortedRow.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
     // Target Column K: Postal Code
@@ -930,12 +960,12 @@ export const processZymeE4hFile = async (
     sheet2Row.push(record.finalNameValue);
     // Col G: match
     sheet2Row.push(record.matchValue);
-    // Col H: Street
+    // Col H: Street (Customer Street 1)
     sheet2Row.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Col I: Street 2 (RplStreet1)
-    sheet2Row.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Col J: Street 3 (RplStreet2)
-    sheet2Row.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
+    // Col I: Street 2 (Customer Street 2)
+    sheet2Row.push(mapping.street2 >= 0 ? (sourceRow[mapping.street2] ?? '') : '');
+    // Col J: Street 3 (Customer Street 3)
+    sheet2Row.push(mapping.street3 >= 0 ? (sourceRow[mapping.street3] ?? '') : '');
     // Col K: City
     sheet2Row.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
     // Col L: RPLname

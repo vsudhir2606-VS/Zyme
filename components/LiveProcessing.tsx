@@ -1168,8 +1168,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     const actionColIdx = findCol(headers, ['action', 'reviewaction', 'review']);
     const notesColIdx = findCol(headers, ['reviewnotes', 'notes', 'comment', 'comments', 'remark', 'remarks']);
 
-    // Collect all customer street/address column indices (Columns G, H, I in clean report and any address lines)
-    // Exclude category, BP category, Bus.Partner Category, RPL name, status, screening
+    // Collect all customer street/address column indices (all columns named 'street' / 'address')
+    // STRICT RULE: Exclude RPL street1 (RplStreet1 is RPL's street address, NOT customer address)
+    // Also exclude category, BP category, Bus.Partner Category, RPL name, status, screening
     const customerStreetCols: { header: string; idx: number }[] = [];
     headers.forEach((h, idx) => {
       if (
@@ -1186,35 +1187,31 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         return;
       }
       const hClean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // CRITICAL: RplStreet1 is RPL street address, NOT customer street address!
+      if (hClean.includes('rpl')) {
+        return;
+      }
       if (hClean.includes('screening') || hClean.includes('status') || hClean.includes('category') || hClean.includes('categ')) {
         return;
       }
 
-      // Check if this is Column G (idx 6), Column H (idx 7), or Column I (idx 8) with street data,
-      // or if the header indicates street/address
-      const isCleanReportStreetCol = (idx === 6 || idx === 7 || idx === 8) && (
-        hClean.includes('street') || 
-        hClean.includes('address') || 
-        hClean.includes('rplstreet') || 
-        hClean === 'g' || 
-        hClean === 'h' || 
-        hClean === 'i'
-      );
-
-      const isOtherStreetCol =
+      // Customer street is all columns named 'street', 'address', 'stras', 'houseno', 'building'
+      const isCustomerStreet =
         hClean.includes('street') || 
         hClean.includes('address') || 
         hClean.includes('stras') || 
         hClean.includes('houseno') || 
-        hClean.includes('building');
+        hClean.includes('building') ||
+        (idx === 6 || idx === 7 || idx === 8); // Columns G, H, I in clean report
 
-      if (isCleanReportStreetCol || isOtherStreetCol) {
+      if (isCustomerStreet) {
         let label = headers[idx] || `Street ${customerStreetCols.length + 1}`;
         if (idx === 6 && (label.toLowerCase() === 'street' || label.toLowerCase() === 'street1')) {
           label = 'Street 1';
-        } else if (idx === 7 || label.toLowerCase().includes('rplstreet1')) {
+        } else if (idx === 7 && label.toLowerCase() === 'street') {
           label = 'Street 2';
-        } else if (idx === 8 || label.toLowerCase().includes('rplstreet2')) {
+        } else if (idx === 8 && label.toLowerCase() === 'street') {
           label = 'Street 3';
         }
         customerStreetCols.push({ header: label, idx });

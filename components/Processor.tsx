@@ -60,6 +60,8 @@ export const Processor: React.FC<ProcessorProps> = ({
     name: -1,
     match: -1,
     street: -1,
+    street2: -1,
+    street3: -1,
     rplStreet1: -1,
     rplStreet2: -1,
     city: -1,
