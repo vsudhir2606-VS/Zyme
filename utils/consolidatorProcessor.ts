@@ -18,6 +18,21 @@ export interface FileContribution {
   fileSize: number;
 }
 
+export interface FailedFileDetail {
+  fileName: string;
+  fileSize: number;
+  reason: string;
+}
+
+export class ConsolidationError extends Error {
+  public failedFiles: FailedFileDetail[];
+  constructor(message: string, failedFiles: FailedFileDetail[] = []) {
+    super(message);
+    this.name = 'ConsolidationError';
+    this.failedFiles = failedFiles;
+  }
+}
+
 export interface ConsolidationResult {
   data: Uint8Array;
   csvBlob: Blob;
@@ -25,6 +40,7 @@ export interface ConsolidationResult {
   rowCount: number;
   columnCount: number;
   headers: string[];
+  headerSourceFileName: string;
   previewRows: any[][];
   fileContributions: FileContribution[];
   warnings?: string[];
@@ -34,8 +50,10 @@ export interface ConsolidatorOptions {
   onProgress?: (progress: ConsolidatorProgressUpdate) => void;
   signal?: AbortSignal;
   includeFileName?: boolean;
+  takeFirstFileHeaderOnly?: boolean;
   smartColumnAlignment?: boolean;
   removeDuplicateHeaders?: boolean;
+  strictAllFilesRequired?: boolean;
 }
 
 const clampCell = (val: any): any => {
@@ -61,36 +79,34 @@ const escapeCsvCell = (val: any): string => {
 };
 
 /**
- * Universal Consolidator Engine:
- * Merges whatever data is given across any number of files updated.
- * Features:
- * - Smart header union & alignment so columns across different files align properly
- * - Automatic duplicate header removal from subsequent files
- * - Optional "Source File" tracking in Column A
- * - Multi-format support (.xlsx, .xls, .csv, .xlsm, .xlsb)
- * - Both Excel (.xlsx) and CSV exports with preview
+ * Zyme Consolidator Engine:
+ * - Must consolidate ALL files; if any file fails/empty/corrupted, raises an error so UI pops up error modal.
+ * - Takes 1 file header (File 1) and consolidates remaining files' data underneath it.
+ * - Strips redundant headers from subsequent files.
  */
 export const consolidateFiles = async (
   files: File[],
   options?: ConsolidatorOptions
 ): Promise<ConsolidationResult> => {
-  if (files.length === 0) {
+  if (!files || files.length === 0) {
     throw new Error("No files selected for consolidation.");
   }
 
   const { 
     onProgress, 
     signal, 
-    includeFileName = true, 
+    includeFileName = false, 
+    takeFirstFileHeaderOnly = true,
     smartColumnAlignment = true, 
-    removeDuplicateHeaders = true 
+    removeDuplicateHeaders = true,
+    strictAllFilesRequired = true
   } = options || {};
 
   const totalFiles = files.length;
   const warnings: string[] = [];
   const fileContributions: FileContribution[] = [];
+  const failedFiles: FailedFileDetail[] = [];
 
-  // Intermediate raw file sheets
   interface ParsedFile {
     file: File;
     rows: any[][];
@@ -98,7 +114,7 @@ export const consolidateFiles = async (
   }
   const parsedFiles: ParsedFile[] = [];
 
-  // Phase 1: Read all files
+  // Phase 1: Read and validate EVERY uploaded file
   for (let fileIdx = 0; fileIdx < totalFiles; fileIdx++) {
     if (signal?.aborted) {
       throw new Error("Consolidation was cancelled by the user.");
@@ -119,6 +135,16 @@ export const consolidateFiles = async (
     }
 
     await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Zero-byte check
+    if (file.size === 0) {
+      failedFiles.push({
+        fileName: file.name,
+        fileSize: file.size,
+        reason: "File is completely empty (0 bytes)."
+      });
+      continue;
+    }
 
     try {
       const data = await file.arrayBuffer();
@@ -147,20 +173,33 @@ export const consolidateFiles = async (
             const text = await file.text();
             tempWb = XLSX.read(text, { type: 'string' });
           } catch (textErr: any) {
-            throw new Error(`Unable to read spreadsheet: ${textErr.message || 'Unsupported format'}`);
+            failedFiles.push({
+              fileName: file.name,
+              fileSize: file.size,
+              reason: `Unsupported format or corrupted spreadsheet: ${textErr?.message || 'Read error'}`
+            });
+            continue;
           }
         }
       }
 
       if (!tempWb || !tempWb.SheetNames || !tempWb.SheetNames.length) {
-        warnings.push(`File "${file.name}" contains no sheets and was skipped.`);
+        failedFiles.push({
+          fileName: file.name,
+          fileSize: file.size,
+          reason: "Workbook contains no readable sheets or tabs."
+        });
         continue;
       }
 
       const sheetName = tempWb.SheetNames[0];
       const worksheet = tempWb.Sheets[sheetName];
       if (!worksheet) {
-        warnings.push(`File "${file.name}" sheet "${sheetName}" was empty or could not be parsed.`);
+        failedFiles.push({
+          fileName: file.name,
+          fileSize: file.size,
+          reason: `Sheet "${sheetName}" is empty or could not be loaded.`
+        });
         continue;
       }
 
@@ -174,7 +213,11 @@ export const consolidateFiles = async (
       });
 
       if (!rawRows || rawRows.length === 0) {
-        warnings.push(`File "${file.name}" contains no data rows and was skipped.`);
+        failedFiles.push({
+          fileName: file.name,
+          fileSize: file.size,
+          reason: "File contains 0 data rows."
+        });
         continue;
       }
 
@@ -184,7 +227,21 @@ export const consolidateFiles = async (
       );
 
       if (nonEmptyRows.length === 0) {
-        warnings.push(`File "${file.name}" only contains blank rows.`);
+        failedFiles.push({
+          fileName: file.name,
+          fileSize: file.size,
+          reason: "File contains only blank rows."
+        });
+        continue;
+      }
+
+      // Check if file only has a header and no actual data rows
+      if (nonEmptyRows.length === 1) {
+        failedFiles.push({
+          fileName: file.name,
+          fileSize: file.size,
+          reason: "File contains only a header row with 0 data rows underneath."
+        });
         continue;
       }
 
@@ -203,18 +260,41 @@ export const consolidateFiles = async (
 
     } catch (err: any) {
       console.error(`Error reading file ${file.name}:`, err);
-      warnings.push(`File "${file.name}" could not be parsed: ${err.message || 'Error'}`);
+      failedFiles.push({
+        fileName: file.name,
+        fileSize: file.size,
+        reason: err.message || "Failed to parse file."
+      });
     }
   }
 
-  if (parsedFiles.length === 0) {
-    throw new Error("None of the selected files could be parsed or all were empty.");
+  // Strict check: ALL files must be consolidated! If not, popup error!
+  if (strictAllFilesRequired && failedFiles.length > 0) {
+    const errorMsg = failedFiles.length === 1
+      ? `Zyme Consolidator error: "${failedFiles[0].fileName}" could not be consolidated (${failedFiles[0].reason}). All files must be valid to consolidate.`
+      : `Zyme Consolidator error: ${failedFiles.length} of ${totalFiles} files failed consolidation. All files must be valid to consolidate.`;
+    throw new ConsolidationError(errorMsg, failedFiles);
   }
 
-  // Phase 2: Unify Headers across all files
-  let masterHeaders: string[] = [];
+  if (parsedFiles.length === 0) {
+    throw new ConsolidationError(
+      "None of the selected files could be parsed or all were empty.",
+      failedFiles
+    );
+  }
+
+  // Phase 2: Master Header Definition
+  // Requirement: "just take 1 file header & remaining just consolidate"
+  const firstParsedFile = parsedFiles[0];
+  const primaryHeaderSourceFileName = firstParsedFile.file.name;
   
-  if (smartColumnAlignment) {
+  let masterHeaders: string[] = [];
+
+  if (takeFirstFileHeaderOnly) {
+    // Strictly use File 1's header as requested
+    masterHeaders = [...firstParsedFile.headers];
+  } else if (smartColumnAlignment) {
+    // Union headers across files
     const seenHeaders = new Set<string>();
     parsedFiles.forEach(pf => {
       pf.headers.forEach(h => {
@@ -226,18 +306,10 @@ export const consolidateFiles = async (
       });
     });
   } else {
-    // Take max columns or first file's headers
-    let maxCols = 0;
-    parsedFiles.forEach(pf => {
-      if (pf.headers.length > maxCols) maxCols = pf.headers.length;
-    });
-    masterHeaders = parsedFiles[0].headers;
-    while (masterHeaders.length < maxCols) {
-      masterHeaders.push(`Column_${masterHeaders.length + 1}`);
-    }
+    masterHeaders = [...firstParsedFile.headers];
   }
 
-  // Prepend "Source File" if enabled
+  // Optional: Add "Source File" to Column A if user explicitly checked it
   const finalHeaders = includeFileName 
     ? ["Source File", ...masterHeaders] 
     : [...masterHeaders];
@@ -262,7 +334,7 @@ export const consolidateFiles = async (
 
   let totalRowCount = 0;
 
-  // Phase 3: Merge rows from all files
+  // Phase 3: Consolidate data rows across ALL files
   for (let pIdx = 0; pIdx < parsedFiles.length; pIdx++) {
     if (signal?.aborted) {
       throw new Error("Consolidation was cancelled by the user.");
@@ -283,29 +355,40 @@ export const consolidateFiles = async (
       });
     }
 
-    // Build header column index mapping for this file
+    // Build column index mapping for this file against masterHeaders
     const colIndexMap: number[] = [];
     headers.forEach((h, srcIdx) => {
       const normH = h.trim().toLowerCase();
       const targetIdx = masterHeaders.findIndex(mh => mh.toLowerCase() === normH);
-      colIndexMap[srcIdx] = targetIdx !== -1 ? targetIdx : srcIdx;
+      // If exact or case-insensitive match found, use it; otherwise, if same column index is available, fallback to index
+      if (targetIdx !== -1) {
+        colIndexMap[srcIdx] = targetIdx;
+      } else if (srcIdx < masterHeaders.length) {
+        colIndexMap[srcIdx] = srcIdx;
+      } else {
+        colIndexMap[srcIdx] = -1; // excess column
+      }
     });
 
     let fileRowCount = 0;
 
-    // Start from row 1 if file has a header row, or check if row 0 is header
-    const startIndex = 1; // row 0 is header in each file
+    // Row 0 in every file is its header.
+    // For file 0: row 0 was used to create masterHeaders.
+    // For all files (including subsequent ones): data rows start strictly from index 1!
+    const startIndex = 1;
 
     for (let r = startIndex; r < rows.length; r++) {
       const row = rows[r];
       if (!row || row.length === 0) continue;
 
-      // Check if this row is a duplicate header row
+      // Check if this row is a duplicate repeated header row inside the file
       if (removeDuplicateHeaders) {
         const isDuplicateHeader = row.every((val, colIdx) => {
           const strVal = String(val ?? "").trim();
           if (!strVal) return true;
-          return headers[colIdx] && strVal.toLowerCase() === headers[colIdx].toLowerCase();
+          const selfHeaderMatch = headers[colIdx] && strVal.toLowerCase() === headers[colIdx].toLowerCase();
+          const masterHeaderMatch = masterHeaders[colIdx] && strVal.toLowerCase() === masterHeaders[colIdx].toLowerCase();
+          return selfHeaderMatch || masterHeaderMatch;
         });
         if (isDuplicateHeader) continue;
       }
@@ -314,7 +397,7 @@ export const consolidateFiles = async (
       const hasData = row.some(c => c !== undefined && c !== null && String(c).trim() !== "");
       if (!hasData) continue;
 
-      // Construct aligned unified row
+      // Construct aligned unified row matching masterHeaders
       const unifiedRow = new Array(masterHeaders.length).fill("");
       row.forEach((cellVal, srcColIdx) => {
         const targetColIdx = colIndexMap[srcColIdx];
@@ -403,6 +486,7 @@ export const consolidateFiles = async (
     ['Total Files Consolidated', fileContributions.length],
     ['Total Rows Consolidated', totalRowCount],
     ['Total Columns Unified', finalHeaders.length],
+    ['Master Header Source', primaryHeaderSourceFileName],
     ['Consolidation Timestamp', new Date().toLocaleString()],
     ['', ''],
     ['FILE BREAKDOWN', '']
@@ -449,6 +533,7 @@ export const consolidateFiles = async (
     rowCount: totalRowCount,
     columnCount: finalHeaders.length,
     headers: finalHeaders,
+    headerSourceFileName: primaryHeaderSourceFileName,
     previewRows,
     fileContributions,
     warnings: warnings.length > 0 ? warnings : undefined

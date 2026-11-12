@@ -1,6 +1,5 @@
 import React, { useState, useMemo } from 'react';
 import {
-  FileText,
   AlertCircle,
   Copy,
   Trash2,
@@ -13,6 +12,11 @@ import {
   ChevronUp,
   Upload,
   Search,
+  Layers,
+  FileCheck2,
+  Clock,
+  Ban,
+  AlertTriangle,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
@@ -33,12 +37,11 @@ interface ParsedInventoryRow {
 
 interface RegionalStatRow {
   region: string;
-  prefixLabel: string;
   releasedFiles: number;
-  releasedItemCount: number;
-  escalatedFiles: number;
-  escalatedCount: number;
-  inProcessFileCount: number;
+  totalTxnsReleased: number;
+  totalPendingFiles: number;
+  totalTxnsPending: number;
+  countEscalated: number;
 }
 
 export const InventoryReport: React.FC = () => {
@@ -51,7 +54,7 @@ export const InventoryReport: React.FC = () => {
   );
   const [copiedMode, setCopiedMode] = useState<'text' | 'email' | null>(null);
   const [showDetailsTable, setShowDetailsTable] = useState<boolean>(false);
-  const [detailsTab, setDetailsTab] = useState<'released' | 'escalated' | 'inprocess'>('released');
+  const [detailsTab, setDetailsTab] = useState<'released' | 'pending' | 'escalated'>('released');
   const [detailSearch, setDetailSearch] = useState<string>('');
 
   const parseZymeNumber = (val: any): number => {
@@ -176,11 +179,16 @@ export const InventoryReport: React.FC = () => {
 
   const checkIsInProcessOrNew = (statusVal: string): boolean => {
     const normalized = statusVal.trim().toLowerCase().replace(/[-_\s]+/g, '');
+    if (!normalized) return false;
     return (
-      normalized === 'inprocess' ||
       normalized.includes('inprocess') ||
-      normalized === 'new' ||
-      normalized.startsWith('new')
+      normalized.includes('process') ||
+      normalized.includes('new') ||
+      normalized.includes('pending') ||
+      normalized.includes('open') ||
+      normalized.includes('hold') ||
+      normalized.includes('queued') ||
+      normalized.includes('assigned')
     );
   };
 
@@ -247,7 +255,14 @@ export const InventoryReport: React.FC = () => {
             businessTypeColIdx = cIdx;
             foundCols++;
           }
-          if (h === 'status' || h === 'session status' || h === 'file status') {
+          if (
+            h === 'status' || 
+            h === 'session status' || 
+            h === 'file status' || 
+            h.includes('status') ||
+            h.includes('stage') ||
+            h.includes('state')
+          ) {
             statusColIdx = cIdx;
             foundCols++;
           }
@@ -294,9 +309,10 @@ export const InventoryReport: React.FC = () => {
         );
       }
       if (statusColIdx === -1) {
-        statusColIdx = headerRow.findIndex(c =>
-          String(c || '').toLowerCase().includes('status')
-        );
+        statusColIdx = headerRow.findIndex(c => {
+          const s = String(c || '').toLowerCase().trim();
+          return s.includes('status') || s.includes('stage') || s.includes('state');
+        });
       }
       if (lastChangedColIdx === -1) {
         lastChangedColIdx = headerRow.findIndex(c => {
@@ -406,6 +422,7 @@ export const InventoryReport: React.FC = () => {
       r => r.businessType.toLowerCase() === 'zyme' || r.businessType.toLowerCase().includes('zyme')
     );
 
+    // 1. Released on selected date
     const dateMatchedRows = zymeRows.filter(r => r.candidateDates.includes(selectedDate));
     const releasedRows = dateMatchedRows.filter(
       r =>
@@ -414,61 +431,67 @@ export const InventoryReport: React.FC = () => {
         (r.region === 'AMS' || r.region === 'APJ' || r.region === 'EMEA')
     );
 
-    const escalatedRows = releasedRows.filter(
-      r => r.blockedItemCount !== 0 && r.blockedItemCount > 0
-    );
+    // 2. Total Pending Files:
+    // Session Key starting with NASA/AMS, APJ, EMEA & status as In-process
+    const inProcessRows = zymeRows.filter(r => {
+      const isRegional = r.region === 'AMS' || r.region === 'APJ' || r.region === 'EMEA';
+      if (!isRegional) return false;
+      const statusNorm = r.status.trim().toLowerCase().replace(/[-_\s]+/g, '');
+      return statusNorm.includes('inprocess') || statusNorm.includes('process');
+    });
 
-    const inProcessRows = zymeRows.filter(
-      r =>
-        r.isInProcess &&
-        r.releasedItemCount === 0 &&
-        (r.region === 'AMS' || r.region === 'APJ' || r.region === 'EMEA')
-    );
+    // 3. Count Escalated:
+    // "Count escalated must be calculated same as total pending but remove wherever the total released item count is 0, the remaining is the count escalated"
+    // Same as total pending (Session Key starting with NASA/APJ/EMEA & status In-process), but releasedItemCount > 0
+    const escalatedRows = inProcessRows.filter(r => r.releasedItemCount > 0);
 
     const statsByRegion: Record<'AMS' | 'APJ' | 'EMEA', RegionalStatRow> = {
       AMS: {
         region: 'AMS',
-        prefixLabel: 'Nasa*',
         releasedFiles: 0,
-        releasedItemCount: 0,
-        escalatedFiles: 0,
-        escalatedCount: 0,
-        inProcessFileCount: 0,
+        totalTxnsReleased: 0,
+        totalPendingFiles: 0,
+        totalTxnsPending: 0,
+        countEscalated: 0,
       },
       APJ: {
         region: 'APJ',
-        prefixLabel: 'APJ*',
         releasedFiles: 0,
-        releasedItemCount: 0,
-        escalatedFiles: 0,
-        escalatedCount: 0,
-        inProcessFileCount: 0,
+        totalTxnsReleased: 0,
+        totalPendingFiles: 0,
+        totalTxnsPending: 0,
+        countEscalated: 0,
       },
       EMEA: {
         region: 'EMEA',
-        prefixLabel: 'EMEA*',
         releasedFiles: 0,
-        releasedItemCount: 0,
-        escalatedFiles: 0,
-        escalatedCount: 0,
-        inProcessFileCount: 0,
+        totalTxnsReleased: 0,
+        totalPendingFiles: 0,
+        totalTxnsPending: 0,
+        countEscalated: 0,
       },
     };
 
+    // Released files & transactions on selected date
     releasedRows.forEach(row => {
       if (row.region === 'AMS' || row.region === 'APJ' || row.region === 'EMEA') {
         statsByRegion[row.region].releasedFiles += 1;
-        statsByRegion[row.region].releasedItemCount += row.releasedItemCount;
-        if (row.blockedItemCount !== 0 && row.blockedItemCount > 0) {
-          statsByRegion[row.region].escalatedFiles += 1;
-          statsByRegion[row.region].escalatedCount += row.blockedItemCount;
-        }
+        statsByRegion[row.region].totalTxnsReleased += row.releasedItemCount;
       }
     });
 
+    // Total Pending Files (Session Key starting with NASA, APJ, EMEA & status In-process)
     inProcessRows.forEach(row => {
       if (row.region === 'AMS' || row.region === 'APJ' || row.region === 'EMEA') {
-        statsByRegion[row.region].inProcessFileCount += 1;
+        statsByRegion[row.region].totalPendingFiles += 1;
+        statsByRegion[row.region].totalTxnsPending += row.blockedItemCount; // Pending blocked transactions in queue
+      }
+    });
+
+    // Count Escalated (Same as total pending but removing where total released item count is 0)
+    escalatedRows.forEach(row => {
+      if (row.region === 'AMS' || row.region === 'APJ' || row.region === 'EMEA') {
+        statsByRegion[row.region].countEscalated += 1;
       }
     });
 
@@ -479,19 +502,18 @@ export const InventoryReport: React.FC = () => {
     ];
 
     const totalFilesReleased = regionalList.reduce((acc, r) => acc + r.releasedFiles, 0);
-    const totalCountReleased = regionalList.reduce((acc, r) => acc + r.releasedItemCount, 0);
-    const totalEscalatedFiles = regionalList.reduce((acc, r) => acc + r.escalatedFiles, 0);
-    const totalCountEscalated = regionalList.reduce((acc, r) => acc + r.escalatedCount, 0);
-    const totalInProcessFiles = regionalList.reduce((acc, r) => acc + r.inProcessFileCount, 0);
+    const totalTxnsReleased = regionalList.reduce((acc, r) => acc + r.totalTxnsReleased, 0);
+    const totalPendingFiles = regionalList.reduce((acc, r) => acc + r.totalPendingFiles, 0);
+    const totalTxnsPending = regionalList.reduce((acc, r) => acc + r.totalTxnsPending, 0);
+    const totalCountEscalated = regionalList.reduce((acc, r) => acc + r.countEscalated, 0);
 
     const totalRow: RegionalStatRow = {
       region: 'Total',
-      prefixLabel: 'AMS + APJ + EMEA',
       releasedFiles: totalFilesReleased,
-      releasedItemCount: totalCountReleased,
-      escalatedFiles: totalEscalatedFiles,
-      escalatedCount: totalCountEscalated,
-      inProcessFileCount: totalInProcessFiles,
+      totalTxnsReleased: totalTxnsReleased,
+      totalPendingFiles: totalPendingFiles,
+      totalTxnsPending: totalTxnsPending,
+      countEscalated: totalCountEscalated,
     };
 
     const reportDateObj = new Date(`${selectedDate}T00:00:00`);
@@ -508,24 +530,25 @@ export const InventoryReport: React.FC = () => {
 Please find the Zyme inventory details for ${formattedDate}:
 
 • Total Files Released: ${totalFilesReleased} files
-• Total Count Released: ${Math.round(totalCountReleased)} Transactions (AMS: ${statsByRegion.AMS.releasedFiles} files / ${Math.round(statsByRegion.AMS.releasedItemCount)} TXN, APJ: ${statsByRegion.APJ.releasedFiles} files / ${Math.round(statsByRegion.APJ.releasedItemCount)} TXN, EMEA: ${statsByRegion.EMEA.releasedFiles} files / ${Math.round(statsByRegion.EMEA.releasedItemCount)} TXN)
-• Count Escalated/Pending : ${Math.round(totalCountEscalated)} TXN (${Math.round(statsByRegion.APJ.escalatedCount)} - APJ, ${Math.round(statsByRegion.AMS.escalatedCount)} - AMS, ${Math.round(statsByRegion.EMEA.escalatedCount)} - EMEA)
-• Total File Count : ${totalInProcessFiles} files (AMS: ${statsByRegion.AMS.inProcessFileCount}, APJ: ${statsByRegion.APJ.inProcessFileCount}, EMEA: ${statsByRegion.EMEA.inProcessFileCount})`;
+• Total Txn's Released: ${Math.round(totalTxnsReleased)} Transactions (AMS: ${statsByRegion.AMS.releasedFiles} files / ${Math.round(statsByRegion.AMS.totalTxnsReleased)} TXN, APJ: ${statsByRegion.APJ.releasedFiles} files / ${Math.round(statsByRegion.APJ.totalTxnsReleased)} TXN, EMEA: ${statsByRegion.EMEA.releasedFiles} files / ${Math.round(statsByRegion.EMEA.totalTxnsReleased)} TXN)
+• Total Pending Files: ${totalPendingFiles} files (AMS: ${statsByRegion.AMS.totalPendingFiles}, APJ: ${statsByRegion.APJ.totalPendingFiles}, EMEA: ${statsByRegion.EMEA.totalPendingFiles})
+• Total Txn's Pending: ${Math.round(totalTxnsPending)} TXN (AMS: ${Math.round(statsByRegion.AMS.totalTxnsPending)}, APJ: ${Math.round(statsByRegion.APJ.totalTxnsPending)}, EMEA: ${Math.round(statsByRegion.EMEA.totalTxnsPending)})
+• Count Escalated: ${totalCountEscalated} files (APJ: ${statsByRegion.APJ.countEscalated}, AMS: ${statsByRegion.AMS.countEscalated}, EMEA: ${statsByRegion.EMEA.countEscalated})`;
 
     return {
       totalRawRows: allParsedRows.length,
       zymeRowCount: zymeRows.length,
       dateMatchedCount: dateMatchedRows.length,
       releasedRows,
-      escalatedRows,
       inProcessRows,
+      escalatedRows,
       regionalRows: [...regionalList, totalRow],
       statsByRegion,
       totalFilesReleased,
-      totalCountReleased,
-      totalEscalatedFiles,
+      totalTxnsReleased,
+      totalPendingFiles,
+      totalTxnsPending,
       totalCountEscalated,
-      totalInProcessFiles,
       reportText,
       formattedDate,
     };
@@ -543,15 +566,15 @@ Please find the Zyme inventory details for ${formattedDate}:
 
     try {
       const tableHtml = `
-        <table style="width: 100%; max-width: 780px; border-collapse: collapse; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; margin-top: 16px;">
+        <table style="width: 100%; max-width: 760px; border-collapse: collapse; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; margin-top: 14px;">
           <thead>
             <tr style="background-color: #0f172a; color: #ffffff;">
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Region</th>
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Session Key Prefix</th>
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Total Files Released</th>
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Total Count Released(TXNs)</th>
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Count Escalated (TXNs)</th>
-              <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Total File Count (In-Process)</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: left;">Region</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Files Released</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Txn's Released</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Pending Files</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Txn's Pending</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Count Escalated</th>
             </tr>
           </thead>
           <tbody>
@@ -559,20 +582,20 @@ Please find the Zyme inventory details for ${formattedDate}:
               .map(
                 (row, idx) => `
               <tr style="background-color: ${
-                idx === filteredResults.regionalRows.length - 1 ? '#f8fafc' : '#ffffff'
+                idx === filteredResults.regionalRows.length - 1 ? '#f1f5f9' : '#ffffff'
               }; font-weight: ${
-                  idx === filteredResults.regionalRows.length - 1 ? 'bold' : 'normal'
+                  idx === filteredResults.regionalRows.length - 1 ? '700' : '500'
                 };">
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #0f172a;">${row.region}</td>
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #64748b;">${row.prefixLabel}</td>
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${row.releasedFiles}</td>
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${Math.round(
-                  row.releasedItemCount
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; color: #0f172a;">${row.region}</td>
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${row.releasedFiles}</td>
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${Math.round(
+                  row.totalTxnsReleased
                 )}</td>
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${Math.round(
-                  row.escalatedCount
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${row.totalPendingFiles}</td>
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${Math.round(
+                  row.totalTxnsPending
                 )}</td>
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${row.inProcessFileCount}</td>
+                <td style="padding: 9px 14px; border: 1px solid #e2e8f0; text-align: right; color: #0f172a;">${row.countEscalated}</td>
               </tr>
             `
               )
@@ -582,18 +605,18 @@ Please find the Zyme inventory details for ${formattedDate}:
       `;
 
       const fullHtml = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; line-height: 1.6;">
-          <pre style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; white-space: pre-wrap; margin: 0;">${filteredResults.reportText}</pre>
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a; line-height: 1.6;">
+          <pre style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; white-space: pre-wrap; margin: 0; font-size: 13px;">${filteredResults.reportText}</pre>
           ${tableHtml}
         </div>
       `;
 
-      const plainTextWithTable = `${filteredResults.reportText}\n\nRegion\tSession Key Prefix\tTotal Files Released\tTotal Count Released(TXNs)\tCount Escalated (TXNs)\tTotal File Count (In-Process)\n${filteredResults.regionalRows
+      const plainTextWithTable = `${filteredResults.reportText}\n\nRegion\tTotal Files Released\tTotal Txn's Released\tTotal Pending Files\tTotal Txn's Pending\tCount Escalated\n${filteredResults.regionalRows
         .map(
           r =>
-            `${r.region}\t${r.prefixLabel}\t${r.releasedFiles}\t${Math.round(
-              r.releasedItemCount
-            )}\t${Math.round(r.escalatedCount)}\t${r.inProcessFileCount}`
+            `${r.region}\t${r.releasedFiles}\t${Math.round(
+              r.totalTxnsReleased
+            )}\t${r.totalPendingFiles}\t${Math.round(r.totalTxnsPending)}\t${r.countEscalated}`
         )
         .join('\n')}`;
 
@@ -626,9 +649,9 @@ Please find the Zyme inventory details for ${formattedDate}:
     const base =
       detailsTab === 'released'
         ? filteredResults.releasedRows
-        : detailsTab === 'escalated'
-        ? filteredResults.escalatedRows
-        : filteredResults.inProcessRows;
+        : detailsTab === 'pending'
+        ? filteredResults.inProcessRows
+        : filteredResults.escalatedRows;
 
     if (!detailSearch.trim()) return base;
     const q = detailSearch.toLowerCase().trim();
@@ -641,108 +664,97 @@ Please find the Zyme inventory details for ${formattedDate}:
   }, [detailsTab, filteredResults, detailSearch]);
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 md:p-8 relative z-10">
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className="flex-1 overflow-y-auto p-5 md:p-8 relative z-10 font-sans">
+      <div className="max-w-5xl mx-auto space-y-6">
         
-        {/* Unified Top Control Bar */}
-        <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs p-5">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
+        {/* Top Minimal Action & Filter Bar */}
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 md:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             
-            {/* Left: File Source Control */}
-            <div className="flex items-center gap-4 flex-1 min-w-0">
-              <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200/80 flex items-center justify-center text-slate-700 flex-shrink-0">
+            {/* Left: Workbook Info / Selector */}
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 flex-shrink-0">
                 {isProcessing ? (
-                  <Loader2 size={20} className="animate-spin text-indigo-600" />
+                  <Loader2 size={18} className="animate-spin text-indigo-600" />
                 ) : (
-                  <FileSpreadsheet size={20} />
+                  <FileSpreadsheet size={18} />
                 )}
               </div>
 
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-slate-900 truncate">
-                    {fileName ? fileName : 'Inventory Source Workbook'}
+                  <h3 className="text-sm font-bold text-slate-800 truncate">
+                    {fileName ? fileName : 'Upload Zyme Inventory Report'}
                   </h3>
+                  {fileName && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full border border-emerald-100">
+                      Loaded
+                    </span>
+                  )}
                 </div>
-                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                <p className="text-xs text-slate-400 mt-0.5 truncate">
                   {fileName
-                    ? `${filteredResults.totalRawRows.toLocaleString()} total rows · ${filteredResults.zymeRowCount.toLocaleString()} Zyme records`
-                    : 'Upload single Excel or CSV export to compute regional release and in-process metrics'}
+                    ? `${filteredResults.totalRawRows.toLocaleString()} rows · ${filteredResults.zymeRowCount.toLocaleString()} Zyme records`
+                    : 'Select .xlsx or .csv report to analyze metrics'}
                 </p>
-              </div>
-
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-colors shadow-2xs">
-                  <Upload size={14} />
-                  <span>{fileName ? 'Replace File' : 'Upload Excel'}</span>
-                  <input
-                    type="file"
-                    className="hidden"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={handleFileUpload}
-                  />
-                </label>
-
-                {fileName && (
-                  <button
-                    type="button"
-                    onClick={resetAll}
-                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-lg transition-colors"
-                    title="Clear uploaded file"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                )}
               </div>
             </div>
 
-            {/* Vertical Divider on Desktop */}
-            <div className="hidden lg:block w-px h-10 bg-slate-200" />
-
-            {/* Right: Report Date Filter */}
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex items-center gap-2 text-xs text-slate-600 font-medium">
-                <Calendar size={15} className="text-slate-400" />
-                <span>Last Changed (UTC):</span>
-              </div>
-
-              <div className="flex items-center gap-2">
+            {/* Right: Date Picker & Actions */}
+            <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
+                <Calendar size={13} className="text-slate-400" />
                 <input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="px-3 py-1.5 bg-slate-50 hover:bg-white focus:bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all tabular-nums"
+                  className="bg-transparent text-xs font-semibold text-slate-700 focus:outline-none tabular-nums cursor-pointer"
                 />
+              </div>
+
+              <label className="cursor-pointer inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-semibold transition-all shadow-xs">
+                <Upload size={13} />
+                <span>{fileName ? 'Replace' : 'Upload File'}</span>
+                <input
+                  type="file"
+                  className="hidden"
+                  accept=".xlsx,.xls,.csv"
+                  onChange={handleFileUpload}
+                />
+              </label>
+
+              {fileName && (
                 <button
                   type="button"
-                  onClick={() => setSelectedDate(new Date().toISOString().split('T')[0])}
-                  className="px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/70 rounded-lg transition-colors"
+                  onClick={resetAll}
+                  className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 rounded-xl transition-colors cursor-pointer"
+                  title="Remove uploaded file"
                 >
-                  Today
+                  <Trash2 size={14} />
                 </button>
-              </div>
+              )}
             </div>
 
           </div>
 
-          {/* Available Dates Selector Bar (when file is loaded) */}
+          {/* Quick Date Pills */}
           {fileName && availableZymeDates.length > 0 && (
-            <div className="mt-4 pt-3.5 border-t border-slate-100 flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-slate-400 font-medium mr-1">
-                Detected dates in file:
+            <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-medium text-slate-400 mr-1">
+                Quick Dates:
               </span>
-              {availableZymeDates.slice(0, 10).map(d => (
+              {availableZymeDates.slice(0, 8).map(d => (
                 <button
                   key={d.date}
                   type="button"
                   onClick={() => setSelectedDate(d.date)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors tabular-nums ${
+                  className={`px-2 py-0.5 rounded-lg text-[11px] font-semibold transition-all tabular-nums cursor-pointer ${
                     selectedDate === d.date
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80 hover:text-slate-900'
+                      ? 'bg-indigo-600 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                   }`}
                 >
-                  {d.date} <span className="opacity-70">({d.count})</span>
+                  {d.date}
                 </button>
               ))}
             </div>
@@ -751,188 +763,167 @@ Please find the Zyme inventory details for ${formattedDate}:
 
         {/* Error Alert */}
         {error && (
-          <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start gap-3">
-            <AlertCircle className="text-rose-600 mt-0.5 flex-shrink-0" size={18} />
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 shadow-xs">
+            <AlertCircle className="text-rose-600 mt-0.5 flex-shrink-0" size={17} />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-rose-900">Unable to process workbook</p>
+              <p className="text-xs font-bold text-rose-900">Workbook Read Error</p>
               <p className="text-xs text-rose-700 mt-0.5">{error}</p>
             </div>
-            <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-600">
-              <Trash2 size={15} />
+            <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-600 p-1">
+              <Trash2 size={13} />
             </button>
           </div>
         )}
 
-        {/* Empty Upload State */}
+        {/* Empty Upload Hero */}
         {!fileName && !error && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs p-10 text-center">
-            <div className="max-w-lg mx-auto space-y-5">
-              <label className="group block border-2 border-dashed border-slate-200 hover:border-indigo-500 rounded-xl p-10 cursor-pointer transition-colors bg-slate-50/50 hover:bg-indigo-50/10">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center">
+            <div className="max-w-md mx-auto space-y-4">
+              <label className="group flex flex-col items-center justify-center border-2 border-dashed border-slate-200 hover:border-indigo-500 rounded-2xl p-8 cursor-pointer transition-all bg-slate-50/50 hover:bg-indigo-50/20">
                 <input
                   type="file"
                   className="hidden"
                   accept=".xlsx,.xls,.csv"
                   onChange={handleFileUpload}
                 />
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 group-hover:text-indigo-600 group-hover:border-indigo-200 transition-colors shadow-2xs">
-                    <Upload size={22} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors">
-                      Drop your Zyme Inventory Excel file here, or click to browse
-                    </p>
-                    <p className="text-xs text-slate-400 mt-1">
-                      Supports .xlsx, .xls, and .csv exports
-                    </p>
-                  </div>
+                <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200 group-hover:border-indigo-300 group-hover:text-indigo-600 text-slate-500 flex items-center justify-center transition-all shadow-xs mb-3">
+                  <Upload size={20} />
                 </div>
+                <p className="text-sm font-bold text-slate-800 group-hover:text-indigo-600 transition-colors">
+                  Choose your Zyme Inventory Excel file
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Supports .xlsx, .xls, and .csv exports
+                </p>
               </label>
 
-              <div className="text-left bg-slate-50 rounded-lg p-4 border border-slate-200/60 space-y-2 text-xs text-slate-600">
-                <p className="font-semibold text-slate-800">Automated Calculation Rules</p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-500 leading-relaxed">
-                  <div>
-                    1. Filters <span className="text-slate-700 font-medium">Business Type = Zyme</span> and maps <span className="text-slate-700 font-medium">Session Key</span> (<span className="font-mono">Nasa*</span> &rarr; AMS, <span className="font-mono">APJ*</span> &rarr; APJ, <span className="font-mono">EMEA*</span> &rarr; EMEA).
-                  </div>
-                  <div>
-                    2. <span className="text-slate-700 font-medium">Released Files &amp; TXNs</span>: Matches selected <span className="text-slate-700 font-medium">Last Changed At (UTC)</span> date with <span className="text-slate-700 font-medium">Total Released Item Count &ne; 0</span>.
-                  </div>
-                  <div>
-                    3. <span className="text-slate-700 font-medium">Count Escalated (TXNs)</span>: Sums <span className="text-slate-700 font-medium">Total Blocked Item Count</span> where Released &ne; 0 and Blocked &ne; 0.
-                  </div>
-                  <div>
-                    4. <span className="text-slate-700 font-medium">Total File Count (In-Process)</span>: Counts rows where <span className="text-slate-700 font-medium">Status</span> is <span className="text-slate-700 font-medium">In-process</span> or <span className="text-slate-700 font-medium">New</span> and Released = 0.
-                  </div>
-                </div>
+              <div className="text-left bg-slate-50 rounded-xl p-3.5 border border-slate-100 text-[11px] text-slate-500 space-y-1">
+                <span className="font-bold text-slate-700 block text-xs">Included Columns:</span>
+                <p>• Total Files Released &amp; Total Txn's Released</p>
+                <p>• Total Pending Files &amp; Total Txn's Pending</p>
+                <p>• Count Escalated</p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Executive Results Section */}
+        {/* Processed Results View */}
         {fileName && !error && (
-          <div className="space-y-6">
+          <div className="space-y-5">
             
-            {/* Unified 4-Metric KPI Strip */}
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-slate-200/80">
+            {/* Clean 5-KPI Metric Bar */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               
-              {/* Metric 1: Total Files Released */}
-              <div className="p-5 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-500">Total Files Released</span>
-                  <span className="text-xs text-slate-400 font-mono tabular-nums">{selectedDate}</span>
+              {/* Metric 1 */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <FileCheck2 size={14} className="text-indigo-600" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Total Files Released</span>
                 </div>
-                <div className="my-2.5 flex items-baseline gap-2">
-                  <span className="text-3xl font-semibold text-slate-900 tracking-tight font-mono tabular-nums">
+                <div className="my-2">
+                  <span className="text-2xl font-black text-slate-800 font-mono tabular-nums">
                     {filteredResults.totalFilesReleased}
                   </span>
-                  <span className="text-xs text-slate-500">files</span>
                 </div>
-                <div className="text-xs text-slate-500 font-mono tabular-nums flex items-center gap-2">
-                  <span>AMS {filteredResults.statsByRegion.AMS.releasedFiles}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>APJ {filteredResults.statsByRegion.APJ.releasedFiles}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>EMEA {filteredResults.statsByRegion.EMEA.releasedFiles}</span>
-                </div>
+                <p className="text-[10px] text-slate-400 font-mono truncate">
+                  AMS {filteredResults.statsByRegion.AMS.releasedFiles} · APJ {filteredResults.statsByRegion.APJ.releasedFiles} · EMEA {filteredResults.statsByRegion.EMEA.releasedFiles}
+                </p>
               </div>
 
-              {/* Metric 2: Total Count Released (TXNs) */}
-              <div className="p-5 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-500">Total Count Released</span>
-                  <span className="text-xs text-emerald-600 font-medium">Cleared</span>
+              {/* Metric 2 */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <Check size={14} className="text-emerald-600" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Total Txn's Released</span>
                 </div>
-                <div className="my-2.5 flex items-baseline gap-2">
-                  <span className="text-3xl font-semibold text-slate-900 tracking-tight font-mono tabular-nums">
-                    {Math.round(filteredResults.totalCountReleased)}
+                <div className="my-2">
+                  <span className="text-2xl font-black text-emerald-600 font-mono tabular-nums">
+                    {Math.round(filteredResults.totalTxnsReleased)}
                   </span>
-                  <span className="text-xs text-slate-500">Transactions</span>
                 </div>
-                <div className="text-xs text-slate-500 font-mono tabular-nums flex items-center gap-2">
-                  <span>AMS {Math.round(filteredResults.statsByRegion.AMS.releasedItemCount)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>APJ {Math.round(filteredResults.statsByRegion.APJ.releasedItemCount)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>EMEA {Math.round(filteredResults.statsByRegion.EMEA.releasedItemCount)}</span>
-                </div>
+                <p className="text-[10px] text-slate-400 font-mono truncate">
+                  AMS {Math.round(filteredResults.statsByRegion.AMS.totalTxnsReleased)} · APJ {Math.round(filteredResults.statsByRegion.APJ.totalTxnsReleased)} · EMEA {Math.round(filteredResults.statsByRegion.EMEA.totalTxnsReleased)}
+                </p>
               </div>
 
-              {/* Metric 3: Count Escalated/Pending */}
-              <div className="p-5 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-500">Count Escalated/Pending</span>
-                  <span className="text-xs text-amber-600 font-medium">
-                    {filteredResults.totalEscalatedFiles} {filteredResults.totalEscalatedFiles === 1 ? 'file' : 'files'}
+              {/* Metric 3 */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <Clock size={14} className="text-amber-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Total Pending Files</span>
+                </div>
+                <div className="my-2">
+                  <span className="text-2xl font-black text-slate-800 font-mono tabular-nums">
+                    {filteredResults.totalPendingFiles}
                   </span>
                 </div>
-                <div className="my-2.5 flex items-baseline gap-2">
-                  <span className="text-3xl font-semibold text-slate-900 tracking-tight font-mono tabular-nums">
-                    {Math.round(filteredResults.totalCountEscalated)}
-                  </span>
-                  <span className="text-xs text-slate-500">TXN</span>
-                </div>
-                <div className="text-xs text-slate-500 font-mono tabular-nums flex items-center gap-2">
-                  <span>APJ {Math.round(filteredResults.statsByRegion.APJ.escalatedCount)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>AMS {Math.round(filteredResults.statsByRegion.AMS.escalatedCount)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>EMEA {Math.round(filteredResults.statsByRegion.EMEA.escalatedCount)}</span>
-                </div>
+                <p className="text-[10px] text-slate-400 font-mono truncate">
+                  AMS {filteredResults.statsByRegion.AMS.totalPendingFiles} · APJ {filteredResults.statsByRegion.APJ.totalPendingFiles} · EMEA {filteredResults.statsByRegion.EMEA.totalPendingFiles}
+                </p>
               </div>
 
-              {/* Metric 4: Total File Count (In-Process / New) */}
-              <div className="p-5 flex flex-col justify-between">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-slate-500">Total File Count</span>
-                  <span className="text-xs text-indigo-600 font-medium">In-Process / New</span>
+              {/* Metric 4 */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between">
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <Ban size={14} className="text-rose-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Total Txn's Pending</span>
                 </div>
-                <div className="my-2.5 flex items-baseline gap-2">
-                  <span className="text-3xl font-semibold text-slate-900 tracking-tight font-mono tabular-nums">
-                    {filteredResults.totalInProcessFiles}
+                <div className="my-2">
+                  <span className="text-2xl font-black text-rose-600 font-mono tabular-nums">
+                    {Math.round(filteredResults.totalTxnsPending)}
                   </span>
-                  <span className="text-xs text-slate-500">files</span>
                 </div>
-                <div className="text-xs text-slate-500 font-mono tabular-nums flex items-center gap-2">
-                  <span>AMS {filteredResults.statsByRegion.AMS.inProcessFileCount}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>APJ {filteredResults.statsByRegion.APJ.inProcessFileCount}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>EMEA {filteredResults.statsByRegion.EMEA.inProcessFileCount}</span>
+                <p className="text-[10px] text-slate-400 font-mono truncate">
+                  AMS {Math.round(filteredResults.statsByRegion.AMS.totalTxnsPending)} · APJ {Math.round(filteredResults.statsByRegion.APJ.totalTxnsPending)} · EMEA {Math.round(filteredResults.statsByRegion.EMEA.totalTxnsPending)}
+                </p>
+              </div>
+
+              {/* Metric 5 */}
+              <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between col-span-2 md:col-span-1">
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <AlertTriangle size={14} className="text-amber-600" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Count Escalated</span>
                 </div>
+                <div className="my-2">
+                  <span className="text-2xl font-black text-amber-600 font-mono tabular-nums">
+                    {filteredResults.totalCountEscalated}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 font-mono truncate">
+                  APJ {filteredResults.statsByRegion.APJ.countEscalated} · AMS {filteredResults.statsByRegion.AMS.countEscalated} · EMEA {filteredResults.statsByRegion.EMEA.countEscalated}
+                </p>
               </div>
 
             </div>
 
-            {/* Main Results Container: Regional Table + Formatted Status Dispatch */}
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+            {/* Main Clean Card: Regional Table + Email Preview */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
               
-              {/* Results Header Bar */}
-              <div className="px-6 py-4 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-4">
+              {/* Header */}
+              <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-semibold text-slate-900">
-                    Zyme Inventory Report — {filteredResults.formattedDate}
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Inventory Summary — {filteredResults.formattedDate}
                   </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Regional breakdown and formatted email status summary
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Official regional reconciliation
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={copyToClipboard}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors text-xs font-semibold"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-xl transition-all text-xs font-semibold cursor-pointer active:scale-95"
                   >
                     {copiedMode === 'text' ? (
                       <>
-                        <Check size={14} className="text-emerald-600" />
-                        <span className="text-emerald-700">Copied Text</span>
+                        <Check size={13} className="text-emerald-600" />
+                        <span className="text-emerald-700">Copied</span>
                       </>
                     ) : (
                       <>
-                        <Copy size={14} className="text-slate-500" />
+                        <Copy size={13} className="text-slate-500" />
                         <span>Copy Text</span>
                       </>
                     )}
@@ -941,217 +932,198 @@ Please find the Zyme inventory details for ${formattedDate}:
                   <button
                     type="button"
                     onClick={copyForEmail}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors text-xs font-semibold shadow-2xs"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl transition-all text-xs font-semibold shadow-xs cursor-pointer active:scale-95"
                   >
                     {copiedMode === 'email' ? (
                       <>
-                        <Check size={14} />
-                        <span>Copied with Table</span>
+                        <Check size={13} />
+                        <span>Copied Table</span>
                       </>
                     ) : (
                       <>
-                        <Mail size={14} />
-                        <span>Copy for Email</span>
+                        <Mail size={13} />
+                        <span>Copy Table</span>
                       </>
                     )}
                   </button>
                 </div>
               </div>
 
-              {/* Content Body: Regional Breakdown Table + Email Text Preview */}
-              <div className="p-6 space-y-6">
-                
-                {/* Regional Summary Table */}
-                <div>
-                  <div className="overflow-x-auto rounded-lg border border-slate-200">
-                    <table className="w-full text-xs text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-900 text-slate-100 border-b border-slate-800">
-                          <th className="py-3 px-4 font-semibold">Region</th>
-                          <th className="py-3 px-4 font-semibold">Session Key Prefix</th>
-                          <th className="py-3 px-4 font-semibold text-right">
-                            Total Files Released
-                          </th>
-                          <th className="py-3 px-4 font-semibold text-right">
-                            Total Count Released(TXNs)
-                          </th>
-                          <th className="py-3 px-4 font-semibold text-right">
-                            Count Escalated (TXNs)
-                          </th>
-                          <th className="py-3 px-4 font-semibold text-right">
-                            Total File Count (In-Process)
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200/80">
-                        {filteredResults.regionalRows.map((row, idx) => {
-                          const isTotal = idx === filteredResults.regionalRows.length - 1;
-                          return (
-                            <tr
-                              key={row.region}
-                              className={
-                                isTotal
-                                  ? 'bg-slate-50/90 font-semibold text-slate-900 border-t-2 border-slate-300'
-                                  : 'bg-white text-slate-700 hover:bg-slate-50/60 transition-colors'
-                              }
-                            >
-                              <td className="py-3 px-4 font-medium text-slate-900">
-                                {row.region}
-                              </td>
-                              <td className="py-3 px-4 font-mono text-slate-500">
-                                {row.prefixLabel}
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono tabular-nums">
-                                {row.releasedFiles}
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono tabular-nums">
-                                {Math.round(row.releasedItemCount)}
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono tabular-nums">
-                                {Math.round(row.escalatedCount)}
-                              </td>
-                              <td className="py-3 px-4 text-right font-mono tabular-nums">
-                                {row.inProcessFileCount}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+              {/* Clean Table */}
+              <div className="p-5 space-y-5">
+                <div className="overflow-x-auto rounded-xl border border-slate-200">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-900 text-slate-100">
+                        <th className="py-2.5 px-4 font-bold">Region</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Total Files Released</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Total Txn's Released</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Total Pending Files</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Total Txn's Pending</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Count Escalated</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                      {filteredResults.regionalRows.map((row, idx) => {
+                        const isTotal = idx === filteredResults.regionalRows.length - 1;
+                        return (
+                          <tr
+                            key={row.region}
+                            className={
+                              isTotal
+                                ? 'bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-200'
+                                : 'bg-white text-slate-700 hover:bg-slate-50/70 transition-colors'
+                            }
+                          >
+                            <td className="py-2.5 px-4 font-sans font-bold text-slate-900">
+                              {row.region}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums text-slate-800">
+                              {row.releasedFiles}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums text-emerald-700 font-bold">
+                              {Math.round(row.totalTxnsReleased)}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums text-slate-800">
+                              {row.totalPendingFiles}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums text-rose-600 font-semibold">
+                              {Math.round(row.totalTxnsPending)}
+                            </td>
+                            <td className="py-2.5 px-4 text-right tabular-nums text-amber-700 font-semibold">
+                              {row.countEscalated}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
 
-                {/* Email Status Message Preview */}
-                <div className="rounded-lg border border-slate-200/90 bg-slate-50/60 p-5">
-                  <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-slate-200/70">
-                    <span className="text-xs font-semibold text-slate-700">
+                {/* Email Dispatch Box */}
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                       Formatted Email Dispatch
                     </span>
-                    <span className="text-xs text-slate-400">
-                      Ready to paste into Outlook / Teams
+                    <span className="text-[10px] text-slate-400">
+                      Matches official update format
                     </span>
                   </div>
-                  <pre className="whitespace-pre-wrap font-sans text-slate-800 leading-relaxed text-sm select-all">
+                  <pre className="whitespace-pre-wrap font-sans text-slate-800 leading-relaxed text-xs select-all">
                     {filteredResults.reportText}
                   </pre>
                 </div>
-
               </div>
 
-              {/* Footer: Collapsible Row-Level Audit Inspector */}
-              <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200/80">
-                <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setShowDetailsTable(prev => !prev)}
-                    className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 hover:text-indigo-600 transition-colors"
-                  >
-                    {showDetailsTable ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                    <span>
-                      {showDetailsTable ? 'Hide underlying session records' : 'Inspect underlying session records'}
-                    </span>
-                    <span className="text-slate-400 font-normal font-mono tabular-nums">
-                      ({filteredResults.releasedRows.length} released · {filteredResults.escalatedRows.length} escalated · {filteredResults.inProcessRows.length} in-process/new)
-                    </span>
-                  </button>
-                </div>
+              {/* Collapsible Record Inspector */}
+              <div className="px-5 py-3 bg-slate-50/60 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowDetailsTable(prev => !prev)}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 hover:text-indigo-600 transition-colors cursor-pointer"
+                >
+                  {showDetailsTable ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  <span>
+                    {showDetailsTable ? 'Hide underlying records' : 'Inspect underlying records'}
+                  </span>
+                  <span className="text-slate-400 font-normal">
+                    ({filteredResults.releasedRows.length} released · {filteredResults.inProcessRows.length} pending · {filteredResults.escalatedRows.length} escalated)
+                  </span>
+                </button>
 
                 {showDetailsTable && (
-                  <div className="mt-4 space-y-3 pt-3 border-t border-slate-200/70">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="mt-3.5 space-y-3 pt-3 border-t border-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2.5">
                       {/* Segmented Filter Control */}
-                      <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg">
+                      <div className="flex items-center gap-1 p-1 bg-slate-200/60 rounded-xl">
                         <button
                           type="button"
                           onClick={() => setDetailsTab('released')}
-                          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors tabular-nums ${
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                             detailsTab === 'released'
-                              ? 'bg-white text-slate-900 shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
+                              ? 'bg-white text-slate-900 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
                           }`}
                         >
                           Released ({filteredResults.releasedRows.length})
                         </button>
                         <button
                           type="button"
+                          onClick={() => setDetailsTab('pending')}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            detailsTab === 'pending'
+                              ? 'bg-white text-slate-900 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          Pending ({filteredResults.inProcessRows.length})
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setDetailsTab('escalated')}
-                          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors tabular-nums ${
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                             detailsTab === 'escalated'
-                              ? 'bg-white text-slate-900 shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
+                              ? 'bg-white text-slate-900 shadow-xs'
+                              : 'text-slate-500 hover:text-slate-800'
                           }`}
                         >
                           Escalated ({filteredResults.escalatedRows.length})
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDetailsTab('inprocess')}
-                          className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors tabular-nums ${
-                            detailsTab === 'inprocess'
-                              ? 'bg-white text-slate-900 shadow-2xs'
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          In-Process / New ({filteredResults.inProcessRows.length})
-                        </button>
                       </div>
 
-                      {/* Search Input */}
-                      <div className="relative w-full sm:w-64">
+                      {/* Search */}
+                      <div className="relative w-full sm:w-56">
                         <Search
-                          size={14}
-                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                          size={13}
+                          className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400"
                         />
                         <input
                           type="text"
                           value={detailSearch}
                           onChange={(e) => setDetailSearch(e.target.value)}
-                          placeholder="Filter by Session Key or Region..."
-                          className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                          placeholder="Filter session keys..."
+                          className="w-full pl-7 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                         />
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto max-h-80 rounded-lg border border-slate-200 bg-white">
+                    <div className="overflow-x-auto max-h-72 rounded-xl border border-slate-200 bg-white">
                       <table className="w-full text-xs text-left border-collapse">
-                        <thead className="bg-slate-100 text-slate-600 sticky top-0 border-b border-slate-200">
+                        <thead className="bg-slate-50 text-slate-600 sticky top-0 border-b border-slate-200">
                           <tr>
-                            <th className="py-2.5 px-3.5 font-semibold">Session Key</th>
-                            <th className="py-2.5 px-3.5 font-semibold">Region</th>
-                            <th className="py-2.5 px-3.5 font-semibold">Status</th>
-                            <th className="py-2.5 px-3.5 font-semibold">Last Changed At (UTC)</th>
-                            <th className="py-2.5 px-3.5 font-semibold text-right">
-                              Released (TXNs)
-                            </th>
-                            <th className="py-2.5 px-3.5 font-semibold text-right">
-                              Blocked / Escalated (TXNs)
-                            </th>
+                            <th className="py-2 px-3 font-semibold">Session Key</th>
+                            <th className="py-2 px-3 font-semibold">Region</th>
+                            <th className="py-2 px-3 font-semibold">Status</th>
+                            <th className="py-2 px-3 font-semibold">Last Changed (UTC)</th>
+                            <th className="py-2 px-3 font-semibold text-right">Released TXNs</th>
+                            <th className="py-2 px-3 font-semibold text-right">Blocked TXNs</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
+                        <tbody className="divide-y divide-slate-100 font-mono text-[10px]">
                           {activeDetailRows.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="p-6 text-center text-slate-400">
-                                No matching records found for this view.
+                              <td colSpan={6} className="p-4 text-center text-slate-400 font-sans">
+                                No records matching view.
                               </td>
                             </tr>
                           ) : (
                             activeDetailRows.map((r, i) => (
-                              <tr key={i} className="hover:bg-slate-50/80">
-                                <td className="py-2 px-3.5 font-mono text-slate-900">
+                              <tr key={i} className="hover:bg-slate-50/70">
+                                <td className="py-1.5 px-3 font-bold text-slate-900">
                                   {r.sessionKey}
                                 </td>
-                                <td className="py-2 px-3.5 font-medium text-slate-700">
+                                <td className="py-1.5 px-3 font-sans font-medium text-slate-700">
                                   {r.region}
                                 </td>
-                                <td className="py-2 px-3.5 text-slate-600">{r.status || '—'}</td>
-                                <td className="py-2 px-3.5 font-mono text-slate-500 tabular-nums">
+                                <td className="py-1.5 px-3 text-slate-600 font-sans">{r.status || '—'}</td>
+                                <td className="py-1.5 px-3 text-slate-500 tabular-nums">
                                   {r.lastChangedRaw || '—'}
                                 </td>
-                                <td className="py-2 px-3.5 text-right font-mono tabular-nums font-medium text-slate-900">
+                                <td className="py-1.5 px-3 text-right tabular-nums text-slate-900 font-bold">
                                   {Math.round(r.releasedItemCount)}
                                 </td>
-                                <td className="py-2 px-3.5 text-right font-mono tabular-nums font-medium text-slate-700">
+                                <td className="py-1.5 px-3 text-right tabular-nums text-rose-600 font-bold">
                                   {Math.round(r.blockedItemCount)}
                                 </td>
                               </tr>

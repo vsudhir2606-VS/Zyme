@@ -17,14 +17,14 @@ export const TARGET_ZYME_E4H_COLUMNS: TargetColumnDef[] = [
   { key: 'country', label: 'Country', colLetter: 'E', defaultHeader: 'Country' },
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'street', label: 'Street', colLetter: 'G', defaultHeader: 'street' },
-  { key: 'city', label: 'City', colLetter: 'H', defaultHeader: 'city' },
-  { key: 'postalCode', label: 'Postal Code', colLetter: 'I', defaultHeader: 'Postal Code' },
-  { key: 'rplName', label: 'RPLname', colLetter: 'J', defaultHeader: 'RPLname' },
-  { key: 'typeOfList', label: 'Type of List', colLetter: 'K', defaultHeader: 'Type of List' },
-  { key: 'splId', label: 'SPL Id', colLetter: 'L', defaultHeader: 'SPL Id' },
-  { key: 'rplScreeningStatus', label: 'RPL Screening Status', colLetter: 'M', defaultHeader: 'RPL Screening Status' },
-  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'N', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'O', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'H', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'I', defaultHeader: 'RplStreet1' },
+  { key: 'city', label: 'City', colLetter: 'J', defaultHeader: 'city' },
+  { key: 'postalCode', label: 'Postal Code', colLetter: 'K', defaultHeader: 'Postal Code' },
+  { key: 'rplName', label: 'RPLname', colLetter: 'L', defaultHeader: 'RPLname' },
+  { key: 'typeOfList', label: 'Type of List', colLetter: 'M', defaultHeader: 'Type of List' },
+  { key: 'splId', label: 'SPL Id', colLetter: 'N', defaultHeader: 'SPL Id' },
+  { key: 'rplScreeningStatus', label: 'RPL Screening Status', colLetter: 'O', defaultHeader: 'RPL Screening Status' },
   { key: 'state', label: 'State', colLetter: 'P', defaultHeader: 'State' },
 ];
 
@@ -36,15 +36,15 @@ export const TARGET_ZYME_E4H_SHEET2_COLUMNS: TargetColumnDef[] = [
   { key: 'country', label: 'Country', colLetter: 'E', defaultHeader: 'Country' },
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'match', label: 'Match', colLetter: 'G', defaultHeader: 'match' },
-  { key: 'rplName', label: 'RPLname', colLetter: 'H', defaultHeader: 'RPLname' },
-  { key: 'street', label: 'Street', colLetter: 'I', defaultHeader: 'street' },
-  { key: 'city', label: 'City', colLetter: 'J', defaultHeader: 'city' },
-  { key: 'postalCode', label: 'Postal Code', colLetter: 'K', defaultHeader: 'Postal Code' },
-  { key: 'typeOfList', label: 'Type of List', colLetter: 'L', defaultHeader: 'Type of List' },
-  { key: 'splId', label: 'SPL Id', colLetter: 'M', defaultHeader: 'SPL Id' },
-  { key: 'rplScreeningStatus', label: 'RPL Screening Status', colLetter: 'N', defaultHeader: 'RPL Screening Status' },
-  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'O', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'P', defaultHeader: 'RplStreet1' },
+  { key: 'street', label: 'Street', colLetter: 'H', defaultHeader: 'street' },
+  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'I', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'J', defaultHeader: 'RplStreet1' },
+  { key: 'rplName', label: 'RPLname', colLetter: 'K', defaultHeader: 'RPLname' },
+  { key: 'city', label: 'City', colLetter: 'L', defaultHeader: 'city' },
+  { key: 'postalCode', label: 'Postal Code', colLetter: 'M', defaultHeader: 'Postal Code' },
+  { key: 'typeOfList', label: 'Type of List', colLetter: 'N', defaultHeader: 'Type of List' },
+  { key: 'splId', label: 'SPL Id', colLetter: 'O', defaultHeader: 'SPL Id' },
+  { key: 'rplScreeningStatus', label: 'RPL Screening Status', colLetter: 'P', defaultHeader: 'RPL Screening Status' },
   { key: 'state', label: 'State', colLetter: 'Q', defaultHeader: 'State' },
 ];
 
@@ -878,22 +878,22 @@ export const processZymeE4hFile = async (
     sortedRow.push(record.finalNameValue);
     // Target Column G: Street
     sortedRow.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Target Column H: City
-    sortedRow.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
-    // Target Column I: Postal Code
-    sortedRow.push(mapping.postalCode >= 0 ? (sourceRow[mapping.postalCode] ?? '') : '');
-    // Target Column J: RPLname
-    sortedRow.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
-    // Target Column K: Type of List
-    sortedRow.push(mapping.typeOfList >= 0 ? (sourceRow[mapping.typeOfList] ?? '') : '');
-    // Target Column L: SPL Id
-    sortedRow.push(mapping.splId >= 0 ? (sourceRow[mapping.splId] ?? '') : '');
-    // Target Column M: RPL Screening Status
-    sortedRow.push(mapping.rplScreeningStatus >= 0 ? (sourceRow[mapping.rplScreeningStatus] ?? '') : '');
-    // Target Column N: RplStreet1
+    // Target Column H: RplStreet1 (next to G column)
     sortedRow.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Target Column O: RplStreet1 (2nd street column)
+    // Target Column I: RplStreet1 (2nd street column)
     sortedRow.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
+    // Target Column J: City
+    sortedRow.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
+    // Target Column K: Postal Code
+    sortedRow.push(mapping.postalCode >= 0 ? (sourceRow[mapping.postalCode] ?? '') : '');
+    // Target Column L: RPLname
+    sortedRow.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
+    // Target Column M: Type of List
+    sortedRow.push(mapping.typeOfList >= 0 ? (sourceRow[mapping.typeOfList] ?? '') : '');
+    // Target Column N: SPL Id
+    sortedRow.push(mapping.splId >= 0 ? (sourceRow[mapping.splId] ?? '') : '');
+    // Target Column O: RPL Screening Status
+    sortedRow.push(mapping.rplScreeningStatus >= 0 ? (sourceRow[mapping.rplScreeningStatus] ?? '') : '');
     // Target Column P: State
     sortedRow.push(mapping.state >= 0 ? (sourceRow[mapping.state] ?? '') : '');
 
@@ -922,24 +922,25 @@ export const processZymeE4hFile = async (
     sheet2Row.push(record.finalNameValue);
     // Col G: match (compares customer name & rpl data, finds common keyword or Exact match)
     sheet2Row.push(record.matchValue);
-    // Col H: RPLname (rpl data same as in first sheet format)
-    sheet2Row.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
-    // Col I: Street
+    // Next to G column: All Street columns!
+    // Col H: Street
     sheet2Row.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Col J: City
-    sheet2Row.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
-    // Col K: Postal Code
-    sheet2Row.push(mapping.postalCode >= 0 ? (sourceRow[mapping.postalCode] ?? '') : '');
-    // Col L: Type of List
-    sheet2Row.push(mapping.typeOfList >= 0 ? (sourceRow[mapping.typeOfList] ?? '') : '');
-    // Col M: SPL Id
-    sheet2Row.push(mapping.splId >= 0 ? (sourceRow[mapping.splId] ?? '') : '');
-    // Col N: RPL Screening Status
-    sheet2Row.push(mapping.rplScreeningStatus >= 0 ? (sourceRow[mapping.rplScreeningStatus] ?? '') : '');
-    // Col O: RplStreet1
+    // Col I: RplStreet1
     sheet2Row.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Col P: RplStreet1 (2nd street column)
+    // Col J: RplStreet1 (2nd street column)
     sheet2Row.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
+    // Col K: RPLname (rpl data same as in first sheet format)
+    sheet2Row.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
+    // Col L: City
+    sheet2Row.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
+    // Col M: Postal Code
+    sheet2Row.push(mapping.postalCode >= 0 ? (sourceRow[mapping.postalCode] ?? '') : '');
+    // Col N: Type of List
+    sheet2Row.push(mapping.typeOfList >= 0 ? (sourceRow[mapping.typeOfList] ?? '') : '');
+    // Col O: SPL Id
+    sheet2Row.push(mapping.splId >= 0 ? (sourceRow[mapping.splId] ?? '') : '');
+    // Col P: RPL Screening Status
+    sheet2Row.push(mapping.rplScreeningStatus >= 0 ? (sourceRow[mapping.rplScreeningStatus] ?? '') : '');
     // Col Q: State
     sheet2Row.push(mapping.state >= 0 ? (sourceRow[mapping.state] ?? '') : '');
 

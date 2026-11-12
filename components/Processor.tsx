@@ -444,26 +444,26 @@ export const Processor: React.FC<ProcessorProps> = ({
               </div>
 
               {/* Action Buttons */}
-              <div className="pt-2 flex flex-wrap items-center justify-between gap-3">
+              <div className="pt-3 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
                 <button 
                   onClick={handleDownloadExcel}
-                  className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 py-2.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-all active:scale-[0.99]"
+                  className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 py-2.5 px-6 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-md shadow-emerald-600/20 transition-all cursor-pointer active:scale-95"
                 >
                   <Download size={15} />
-                  <span>Download Excel Report</span>
+                  <span>Download Clean Excel Report</span>
                 </button>
 
                 {onOpenLiveProcessing && (
                   <button 
                     onClick={() => onOpenLiveProcessing(result.sheet2ProcessedRows || result.processedRows, result.fileName)}
-                    className={`inline-flex items-center justify-center gap-1.5 py-1.5 px-3 border text-xs font-semibold rounded-lg transition-all active:scale-[0.99] ${
+                    className={`inline-flex items-center justify-center gap-2 py-2.5 px-5 border text-xs font-bold rounded-xl transition-all cursor-pointer active:scale-95 shadow-sm ${
                       isLiveLocked
-                        ? 'bg-slate-100 hover:bg-slate-200/80 text-slate-600 border-slate-300'
-                        : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                        ? 'bg-slate-100 hover:bg-slate-200/80 text-slate-700 border-slate-300'
+                        : 'bg-indigo-600 hover:bg-indigo-700 text-white border-transparent shadow-indigo-600/20'
                     }`}
-                    title={isLiveLocked ? 'Locked — Click to enter password or configure in Settings' : 'Open in Live Processing'}
+                    title={isLiveLocked ? 'Locked — Click to enter password or configure in Settings' : 'Open directly in Live Processing'}
                   >
-                    {isLiveLocked && <Lock size={12} className="text-slate-500" />}
+                    {isLiveLocked ? <Lock size={13} className="text-slate-500" /> : <SlidersHorizontal size={14} className="text-white" />}
                     <span>Open in Live Processing</span>
                     <ArrowRight size={13} />
                   </button>

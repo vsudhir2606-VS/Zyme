@@ -314,17 +314,18 @@ export function SsRefining() {
     <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto w-full">
       
       {/* PAGE HEADER */}
-      <div className="flex items-center justify-between gap-4 flex-wrap pb-2 border-b border-slate-200">
+      <div className="flex items-center justify-between gap-4 flex-wrap pb-2 border-b border-slate-200/80">
         <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 flex-shrink-0">
-            <GitCompare size={22} />
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-700 text-white flex items-center justify-center shadow-md shadow-indigo-500/20 flex-shrink-0">
+            <GitCompare size={20} />
           </div>
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">
                 SS Refining
               </h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-200">
+              <span aria-hidden="true" className="text-slate-300">·</span>
+              <span className="text-xs font-semibold text-slate-500">
                 Diff & Reconciliation
               </span>
             </div>

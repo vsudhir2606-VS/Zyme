@@ -30,7 +30,12 @@ import {
   FileText,
   FileCheck,
   Hash,
-  Copy
+  Copy,
+  Layout,
+  Columns,
+  Monitor,
+  Layers,
+  Eye
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
@@ -42,6 +47,57 @@ import {
 } from '../utils/splCcStorage.ts';
 
 export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
+
+export type LiveUiPreset = 'modern' | 'compact' | 'focus' | 'auditor';
+
+export interface UiPresetOption {
+  id: LiveUiPreset;
+  name: string;
+  badge: string;
+  tagline: string;
+  description: string;
+  iconName: string;
+  highlights: string[];
+}
+
+export const LIVE_UI_PRESETS: UiPresetOption[] = [
+  {
+    id: 'modern',
+    name: 'Modern Dual-Pane',
+    badge: 'Recommended',
+    tagline: 'Balanced, airy & intuitive with card elevation',
+    description: 'Clean split-screen workstation with smooth rounded corners, soft shadows, and spacious card layouts for comfortable daily compliance reviews.',
+    iconName: 'Layout',
+    highlights: ['Airy padding & soft shadows', 'Rounded 2xl cards with clear badges', 'Balanced typography hierarchy'],
+  },
+  {
+    id: 'compact',
+    name: 'Executive High-Density',
+    badge: 'High Speed',
+    tagline: 'Zero scroll, ultra-condensed for 500+ cases/day',
+    description: 'Optimized for experienced compliance officers who prioritize screen real estate. Tight gutters, streamlined action keys, and zero vertical overflow.',
+    iconName: 'Layers',
+    highlights: ['Compact button bars (fits single viewport)', 'Tighter card padding & smaller gutters', 'Dense RPL rows with high scan rate'],
+  },
+  {
+    id: 'focus',
+    name: 'Command Center Focus',
+    badge: 'High Contrast',
+    tagline: 'High-contrast framing & illuminated alerts',
+    description: 'Dark slate accent framing with vivid glowing alerts. Makes critical decisions (like APRV red or ZKWD orange) immediately unmissable.',
+    iconName: 'Monitor',
+    highlights: ['Deep slate-900 structural accents', 'High-contrast decision chips & glowing rings', 'Enhanced anomaly visibility'],
+  },
+  {
+    id: 'auditor',
+    name: 'Auditor Matrix Grid',
+    badge: 'Audit & QA',
+    tagline: 'Structured side-by-side ledger & comparison tables',
+    description: 'Crisp regulatory comparison grid with explicit field delimiters, comparison checklist markers, and audit trail timestamp tags.',
+    iconName: 'Columns3',
+    highlights: ['Structured table borders & aligned fields', 'Regulatory side-by-side comparison', 'Clear audit-trail timestamps on every field'],
+  },
+];
 
 export type LiveActionType = 
   | 'SPLF'
@@ -57,7 +113,8 @@ export type LiveActionType =
   | 'EMBN'
   | 'CN'
   | 'BLOC'
-  | 'Escalate';
+  | 'Escalate'
+  | 'APRV';
 
 export interface ActionButtonDef {
   key: LiveActionType;
@@ -151,7 +208,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     shortcut: '7',
     description: 'Keyword Match Review',
     colorTheme: {
-      badge: 'bg-orange-100 text-orange-900 border-orange-300 font-bold',
+      badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
       normal: 'hover:border-orange-500 hover:bg-orange-50 text-orange-950 border-orange-300 bg-orange-50/40',
       active: 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300 shadow-sm',
       dot: 'bg-orange-500',
@@ -163,10 +220,10 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     shortcut: '8',
     description: 'Embargo Found',
     colorTheme: {
-      badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
-      normal: 'hover:border-yellow-500 hover:bg-yellow-50 text-yellow-950 border-yellow-300 bg-yellow-50/50',
-      active: 'bg-yellow-500 text-slate-950 font-black border-yellow-600 ring-2 ring-yellow-300 shadow-sm',
-      dot: 'bg-yellow-500',
+      badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
+      normal: 'hover:border-orange-500 hover:bg-orange-50 text-orange-950 border-orange-300 bg-orange-50/40',
+      active: 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300 shadow-sm',
+      dot: 'bg-orange-500',
     },
   },
   {
@@ -175,10 +232,22 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     shortcut: '9',
     description: 'Embassy, consulate army in ZEMB',
     colorTheme: {
-      badge: 'bg-yellow-100 text-yellow-950 border-yellow-300 font-bold',
-      normal: 'hover:border-yellow-500 hover:bg-yellow-50 text-yellow-950 border-yellow-300 bg-yellow-50/50',
-      active: 'bg-yellow-500 text-slate-950 font-black border-yellow-600 ring-2 ring-yellow-300 shadow-sm',
-      dot: 'bg-yellow-500',
+      badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
+      normal: 'hover:border-orange-500 hover:bg-orange-50 text-orange-950 border-orange-300 bg-orange-50/40',
+      active: 'bg-orange-500 text-white border-orange-600 ring-2 ring-orange-300 shadow-sm',
+      dot: 'bg-orange-500',
+    },
+  },
+  {
+    key: 'APRV',
+    label: 'APRV',
+    shortcut: 'A',
+    description: 'Country CTR / APRV Flagged Transaction',
+    colorTheme: {
+      badge: 'bg-red-100 text-red-900 border-red-300 font-bold',
+      normal: 'hover:border-red-500 hover:bg-red-50 text-red-900 border-red-300 bg-red-50/40',
+      active: 'bg-red-600 text-white border-red-700 ring-2 ring-red-300 shadow-sm',
+      dot: 'bg-red-600',
     },
   },
   {
@@ -199,10 +268,10 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
     shortcut: '',
     description: 'Blocked Transaction',
     colorTheme: {
-      badge: 'bg-red-100 text-red-900 border-red-300 font-bold',
-      normal: 'hover:border-red-500 hover:bg-red-50 text-red-900 border-red-300 bg-red-50/40',
-      active: 'bg-red-600 text-white border-red-700 ring-2 ring-red-300 shadow-sm',
-      dot: 'bg-red-600',
+      badge: 'bg-rose-100 text-rose-900 border-rose-300 font-bold',
+      normal: 'hover:border-rose-400 hover:bg-rose-50 text-rose-900 border-rose-300 bg-rose-50/40',
+      active: 'bg-rose-800 text-white border-rose-900 ring-2 ring-rose-300 shadow-sm',
+      dot: 'bg-rose-700',
     },
   },
   {
@@ -264,8 +333,11 @@ export const isExact100Match = (customerName: string, rplName: string): boolean 
   return c.length > 0 && c === r;
 };
 
-// Keywords triggering Red Name Box: ZKWD, ZEMB, APRV
-export const RED_ALERT_KEYWORDS = ['ZKWD', 'ZEMB', 'APRV'];
+// ONLY APRV must be red
+export const RED_ALERT_KEYWORDS = ['APRV'];
+
+// Keywords triggering Orange Name Box: ZKWD, ZEMB, EMBF, EMBN
+export const ORANGE_ALERT_KEYWORDS = ['ZKWD', 'ZEMB', 'EMBF', 'EMBN'];
 
 export const isRedNameMatch = (customerName?: string, status?: string): boolean => {
   const testVal = (val?: string): boolean => {
@@ -289,6 +361,39 @@ export const getRedMatchedKeyword = (customerName?: string, status?: string): st
     if (!val) return null;
     const clean = val.toUpperCase().trim();
     for (const kw of RED_ALERT_KEYWORDS) {
+      if (clean === kw) return kw;
+      const escaped = kw.replace(/\s+/g, '[\\s-_]+');
+      const regex = new RegExp(`(^|[^A-Z0-9])${escaped}([^A-Z0-9]|$)`, 'i');
+      if (regex.test(clean)) return kw;
+    }
+    return null;
+  };
+
+  return findKw(customerName) || findKw(status) || 'APRV';
+};
+
+export const isOrangeNameMatch = (customerName?: string, status?: string): boolean => {
+  const testVal = (val?: string): boolean => {
+    if (!val) return false;
+    const clean = val.toUpperCase().trim();
+    if (!clean) return false;
+    
+    return ORANGE_ALERT_KEYWORDS.some(kw => {
+      if (clean === kw) return true;
+      const escaped = kw.replace(/\s+/g, '[\\s-_]+');
+      const regex = new RegExp(`(^|[^A-Z0-9])${escaped}([^A-Z0-9]|$)`, 'i');
+      return regex.test(clean);
+    });
+  };
+
+  return testVal(customerName) || testVal(status);
+};
+
+export const getOrangeMatchedKeyword = (customerName?: string, status?: string): string => {
+  const findKw = (val?: string): string | null => {
+    if (!val) return null;
+    const clean = val.toUpperCase().trim();
+    for (const kw of ORANGE_ALERT_KEYWORDS) {
       if (clean === kw) return kw;
       const escaped = kw.replace(/\s+/g, '[\\s-_]+');
       const regex = new RegExp(`(^|[^A-Z0-9])${escaped}([^A-Z0-9]|$)`, 'i');
@@ -381,15 +486,15 @@ export const getCustomerBoxTheme = (
     };
   }
 
-  // ZKWD action: orange color
-  if (action === 'ZKWD') {
+  // ZKWD, EMBF & EMBN actions: all look orange when clicked
+  if (action === 'ZKWD' || action === 'EMBF' || action === 'EMBN') {
     return {
       type: 'orange' as const,
       containerClass: 'border-2 border-orange-500 bg-orange-50/95 shadow-md ring-2 ring-orange-300/60',
-      posnrClass: 'bg-orange-500',
+      posnrClass: 'bg-orange-500 text-white font-bold',
       badge: {
-        text: 'ZKWD',
-        className: 'bg-orange-500 text-white shadow-2xs',
+        text: action,
+        className: 'bg-orange-500 text-white shadow-2xs font-black',
         isAlert: false,
       },
       nameCardClass: 'p-3.5 rounded-xl bg-orange-100/85 border border-orange-300 shadow-2xs',
@@ -405,27 +510,27 @@ export const getCustomerBoxTheme = (
     };
   }
 
-  // EMBF & EMBN action: yellow color
-  if (action === 'EMBF' || action === 'EMBN') {
+  // APRV action: only APRV must be red
+  if (action === 'APRV') {
     return {
-      type: 'yellow' as const,
-      containerClass: 'border-2 border-yellow-400 bg-yellow-50/95 shadow-md ring-2 ring-yellow-300/60',
-      posnrClass: 'bg-yellow-500 text-slate-950 font-black',
+      type: 'red-alert' as const,
+      containerClass: 'border-2 border-red-500 bg-red-50/95 shadow-md ring-2 ring-red-300/70',
+      posnrClass: 'bg-red-600 text-white font-bold',
       badge: {
-        text: action,
-        className: 'bg-yellow-500 text-slate-950 font-black shadow-2xs',
-        isAlert: false,
+        text: 'APRV',
+        className: 'bg-red-600 text-white shadow-2xs font-black',
+        isAlert: true,
       },
-      nameCardClass: 'p-3.5 rounded-xl bg-yellow-100/85 border border-yellow-300 shadow-2xs',
-      labelClass: 'text-yellow-900 font-extrabold',
-      nameClass: 'text-yellow-950 font-black',
-      statusBadgeClass: 'bg-yellow-500 text-slate-950 border-yellow-600 font-black',
-      subBorderClass: 'border-yellow-200/80 text-yellow-900/80',
-      subLabelClass: 'text-yellow-800/80 font-medium',
-      countryBadgeClass: 'bg-yellow-100 text-yellow-900 border border-yellow-200',
-      countryPinClass: 'text-yellow-600',
-      actionLabelClass: 'text-yellow-800',
-      actionBorderClass: 'border-yellow-200/80',
+      nameCardClass: 'p-3.5 rounded-xl bg-red-100/90 border border-red-300 shadow-2xs',
+      labelClass: 'text-red-700 font-extrabold',
+      nameClass: 'text-red-950 font-black',
+      statusBadgeClass: 'bg-red-600 text-white border-red-700 font-black',
+      subBorderClass: 'border-red-200/80 text-red-900/80',
+      subLabelClass: 'text-red-700/80 font-medium',
+      countryBadgeClass: 'bg-red-100 text-red-900 border border-red-200',
+      countryPinClass: 'text-red-600',
+      actionLabelClass: 'text-red-700',
+      actionBorderClass: 'border-red-200/80',
     };
   }
 
@@ -501,17 +606,17 @@ export const getCustomerBoxTheme = (
     };
   }
 
-  // 1. If no action assigned yet: check if ZKWD, ZEMB, APRV in name/status -> RED
+  // 1. If no action assigned yet: ONLY APRV in name/status -> RED
   const isRedAlert = isRedNameMatch(customerName, status);
   if (isRedAlert) {
     const kw = getRedMatchedKeyword(customerName, status);
     return {
       type: 'red-alert' as const,
       containerClass: 'border-2 border-red-500 bg-red-50/95 shadow-md ring-2 ring-red-300/70',
-      posnrClass: 'bg-red-600',
+      posnrClass: 'bg-red-600 text-white font-bold',
       badge: {
         text: `${kw} Detected`,
-        className: 'bg-red-600 text-white shadow-2xs animate-pulse',
+        className: 'bg-red-600 text-white shadow-2xs animate-pulse font-black',
         isAlert: true,
       },
       nameCardClass: 'p-3.5 rounded-xl bg-red-100/90 border border-red-300 shadow-2xs',
@@ -524,6 +629,32 @@ export const getCustomerBoxTheme = (
       countryPinClass: 'text-red-600',
       actionLabelClass: 'text-red-700',
       actionBorderClass: 'border-red-200/80',
+    };
+  }
+
+  // 2. If ZKWD, ZEMB, EMBF, EMBN in name/status -> ORANGE
+  const isOrangeAlert = isOrangeNameMatch(customerName, status);
+  if (isOrangeAlert) {
+    const kw = getOrangeMatchedKeyword(customerName, status);
+    return {
+      type: 'orange' as const,
+      containerClass: 'border-2 border-orange-500 bg-orange-50/95 shadow-md ring-2 ring-orange-300/60',
+      posnrClass: 'bg-orange-500 text-white font-bold',
+      badge: {
+        text: `${kw} Detected`,
+        className: 'bg-orange-500 text-white shadow-2xs font-black animate-pulse',
+        isAlert: true,
+      },
+      nameCardClass: 'p-3.5 rounded-xl bg-orange-100/85 border border-orange-300 shadow-2xs',
+      labelClass: 'text-orange-900 font-extrabold',
+      nameClass: 'text-orange-950 font-black',
+      statusBadgeClass: 'bg-orange-500 text-white border-orange-600 font-black',
+      subBorderClass: 'border-orange-200/80 text-orange-900/80',
+      subLabelClass: 'text-orange-800/80 font-medium',
+      countryBadgeClass: 'bg-orange-100 text-orange-900 border border-orange-200',
+      countryPinClass: 'text-orange-600',
+      actionLabelClass: 'text-orange-700',
+      actionBorderClass: 'border-orange-200/80',
     };
   }
 
@@ -574,6 +705,7 @@ export const getCustomerBoxTheme = (
 export const getSidebarItemStyle = (
   action: LiveActionType | null,
   isRedItem: boolean,
+  isOrangeItem: boolean,
   isBlueNoAddItem: boolean,
   isSelected: boolean
 ) => {
@@ -594,15 +726,15 @@ export const getSidebarItemStyle = (
       ? 'bg-blue-100/80 border-l-blue-600 shadow-2xs' 
       : 'border-l-blue-500 bg-blue-50/40 hover:bg-blue-100/40';
   }
-  if (action === 'ZKWD') {
+  if (action === 'ZKWD' || action === 'EMBF' || action === 'EMBN') {
     return isSelected 
       ? 'bg-orange-100/80 border-l-orange-600 shadow-2xs' 
       : 'border-l-orange-500 bg-orange-50/40 hover:bg-orange-100/40';
   }
-  if (action === 'EMBF' || action === 'EMBN') {
+  if (action === 'APRV') {
     return isSelected 
-      ? 'bg-yellow-100/80 border-l-yellow-500 shadow-2xs' 
-      : 'border-l-yellow-400 bg-yellow-50/40 hover:bg-yellow-100/40';
+      ? 'bg-red-100/80 border-l-red-600 shadow-2xs' 
+      : 'border-l-red-600 bg-red-50/40 hover:bg-red-100/40';
   }
   if (action === 'CN') {
     return isSelected 
@@ -611,8 +743,8 @@ export const getSidebarItemStyle = (
   }
   if (action === 'BLOC') {
     return isSelected 
-      ? 'bg-red-100/80 border-l-red-600 shadow-2xs' 
-      : 'border-l-red-600 bg-red-50/40 hover:bg-red-100/40';
+      ? 'bg-rose-100/80 border-l-rose-800 shadow-2xs' 
+      : 'border-l-rose-800 bg-rose-50/40 hover:bg-rose-100/40';
   }
   if (action === 'Escalate') {
     return isSelected 
@@ -623,6 +755,11 @@ export const getSidebarItemStyle = (
     return isSelected 
       ? 'bg-red-100/70 border-l-red-600 shadow-2xs' 
       : 'bg-red-50/70 border-l-red-500 hover:bg-red-100/50';
+  }
+  if (isOrangeItem) {
+    return isSelected 
+      ? 'bg-orange-100/70 border-l-orange-500 shadow-2xs' 
+      : 'bg-orange-50/70 border-l-orange-400 hover:bg-orange-100/50';
   }
   if (isBlueNoAddItem) {
     return isSelected 
@@ -683,6 +820,25 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const [splCcSaveNotice, setSplCcSaveNotice] = useState<string | null>(null);
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Professional UI Presets
+  const [uiPreset, setUiPreset] = useState<LiveUiPreset>(() => {
+    try {
+      return (localStorage.getItem('zyme_live_ui_preset') as LiveUiPreset) || 'modern';
+    } catch {
+      return 'modern';
+    }
+  });
+  const [showUiPresetModal, setShowUiPresetModal] = useState(false);
+
+  const handleSelectUiPreset = (preset: LiveUiPreset) => {
+    setUiPreset(preset);
+    try {
+      localStorage.setItem('zyme_live_ui_preset', preset);
+    } catch {
+      // no-op
+    }
+  };
 
   // Selected RPL for SPL ID Inspection Modal (Double-click on RPL name)
   const [inspectingSplRpl, setInspectingSplRpl] = useState<{
@@ -1451,7 +1607,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       }
 
       // Keys for quick decisions matching ACTION_BUTTON_CONFIG shortcuts
-      const matchedAction = ACTION_BUTTON_CONFIG.find(a => a.shortcut && a.shortcut === e.key);
+      const matchedAction = ACTION_BUTTON_CONFIG.find(a => a.shortcut && (a.shortcut === e.key || a.shortcut.toLowerCase() === e.key.toLowerCase()));
       if (matchedAction) {
         e.preventDefault();
         handleApplyAction(matchedAction.key);
@@ -1749,9 +1905,35 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   </div>
                 </div>
 
-                {/* Right: Prev / Next Navigation & Download & Settings */}
+                {/* Right: Prev / Next Navigation & UI Preset & Download & Settings */}
                 <div className="flex items-center gap-2 flex-wrap">
                   
+                  {/* UI Style Selector Trigger */}
+                  <button
+                    type="button"
+                    onClick={() => setShowUiPresetModal(true)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold shadow-2xs transition-all cursor-pointer ${
+                      uiPreset === 'focus'
+                        ? 'bg-slate-900 text-amber-300 border-slate-700 hover:bg-slate-800'
+                        : uiPreset === 'compact'
+                        ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+                        : uiPreset === 'auditor'
+                        ? 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100'
+                        : 'bg-white hover:bg-indigo-50/50 text-indigo-900 border-indigo-200'
+                    }`}
+                    title="Click to view & select professional UI layouts (Modern, High-Density, Command Center, Auditor Matrix)"
+                  >
+                    <Layout size={13} className={uiPreset === 'focus' ? 'text-amber-400' : 'text-indigo-600'} />
+                    <span className="hidden sm:inline text-slate-500 font-medium">UI:</span>
+                    <span className="font-bold">
+                      {uiPreset === 'modern' && 'Modern'}
+                      {uiPreset === 'compact' && 'High-Density'}
+                      {uiPreset === 'focus' && 'Focus'}
+                      {uiPreset === 'auditor' && 'Auditor'}
+                    </span>
+                    <SlidersHorizontal size={11} className="opacity-60 ml-0.5" />
+                  </button>
+
                   {/* Prev / Next Buttons */}
                   <div className="flex items-center rounded-lg border border-slate-300 bg-white shadow-2xs overflow-hidden">
                     <button
@@ -1924,18 +2106,21 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         filteredCases.map((c) => {
                           const isSelected = c.caseId === activeCase?.caseId;
                           const isRedItem = isRedNameMatch(c.customerName, c.status);
-                          const isBlueNoAddItem = !isRedItem && isNoAddMatch(c.customerName, c.status, c.isNoAdd);
+                          const isOrangeItem = !isRedItem && isOrangeNameMatch(c.customerName, c.status);
+                          const isBlueNoAddItem = !isRedItem && !isOrangeItem && isNoAddMatch(c.customerName, c.status, c.isNoAdd);
 
                           return (
                             <div
                               key={c.caseId}
                               onClick={() => setActiveCaseId(c.caseId)}
-                              className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isBlueNoAddItem, isSelected)}`}
+                              className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
                             >
                               <div className="flex items-center justify-between gap-1 mb-0.5">
                                 <span className={`font-mono text-[11px] font-bold px-1.5 py-0.2 rounded tabular-nums ${
                                   isRedItem
                                     ? 'text-red-700 bg-red-100'
+                                    : isOrangeItem
+                                    ? 'text-orange-800 bg-orange-100'
                                     : isBlueNoAddItem
                                     ? 'text-blue-700 bg-blue-100'
                                     : 'text-indigo-700 bg-indigo-100/60'
@@ -1947,6 +2132,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   {isRedItem && (
                                     <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
                                       {getRedMatchedKeyword(c.customerName, c.status)}
+                                    </span>
+                                  )}
+                                  {isOrangeItem && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
+                                      {getOrangeMatchedKeyword(c.customerName, c.status)}
                                     </span>
                                   )}
                                   {isBlueNoAddItem && (
@@ -1971,6 +2161,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               <p className={`text-xs font-semibold line-clamp-1 ${
                                 isRedItem
                                   ? 'text-red-950 font-bold'
+                                  : isOrangeItem
+                                  ? 'text-orange-950 font-bold'
                                   : isBlueNoAddItem
                                   ? 'text-blue-950 font-bold'
                                   : 'text-slate-800'
@@ -2004,24 +2196,59 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 )}
 
                 {/* MAIN REVIEW WORKSPACE */}
-                <div ref={mainWorkspaceRef} className="flex-1 flex flex-col justify-between p-4 md:p-6 bg-white overflow-y-auto h-full min-h-0 scrollbar-thin">
+                <div 
+                  ref={mainWorkspaceRef} 
+                  className={`flex-1 flex flex-col justify-between overflow-y-auto h-full min-h-0 scrollbar-thin transition-all ${
+                    uiPreset === 'compact'
+                      ? 'p-2.5 md:p-3.5 bg-slate-50/50'
+                      : uiPreset === 'focus'
+                      ? 'p-4 md:p-6 bg-slate-900/5'
+                      : uiPreset === 'auditor'
+                      ? 'p-3.5 md:p-5 bg-slate-100/60'
+                      : 'p-4 md:p-6 bg-white'
+                  }`}
+                >
                   
                   {activeCase ? (
-                    <div className="flex-1 flex flex-col gap-4 min-h-0">
+                    <div className={`flex-1 flex flex-col min-h-0 ${uiPreset === 'compact' ? 'gap-2.5' : 'gap-4'}`}>
+
+                      {/* Auditor Matrix Header if in Auditor Preset */}
+                      {uiPreset === 'auditor' && (
+                        <div className="px-3.5 py-2 rounded-xl bg-white border-2 border-slate-300 shadow-2xs flex items-center justify-between text-xs font-mono text-slate-700 flex-shrink-0 flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-black uppercase tracking-wider text-[10px] text-blue-900 bg-blue-100 px-2 py-0.5 rounded border border-blue-200">
+                              AUDIT COMPARISON MATRIX
+                            </span>
+                            <span className="text-xs text-slate-600">
+                              Order Posnr: <strong className="text-slate-900 font-bold">#{activeCase.posnr}</strong>
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 text-[11px] text-slate-500 font-sans">
+                            <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              <Eye size={12} /> Live Verification Mode
+                            </span>
+                            <span>•</span>
+                            <span>{activeCase.rplEntries.length} RPL Candidate {activeCase.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
+                          </div>
+                        </div>
+                      )}
 
                       {/* SIDE-BY-SIDE BOXES: POSNR/CUSTOMER & RPL LIST */}
-                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1 min-h-[240px]">
+                      <div className={`grid grid-cols-1 lg:grid-cols-12 flex-1 min-h-[240px] ${
+                        uiPreset === 'compact' ? 'gap-3' : uiPreset === 'auditor' ? 'gap-3.5' : 'gap-5'
+                      }`}>
                         
                         {/* 
                           BOX 1 (LEFT / 5 Cols): POSNR & CUSTOMER NAME BOX
                           - SPLF, SPLF(CC), SPLE: Green color + animate green
                           - No add: Blue color
-                          - ZKWD: Orange color
-                          - EMBF & EMBN: Yellow color
+                          - ZKWD, EMBF, EMBN: Orange color
+                          - APRV: Red color
                           - CN: Grey color
-                          - BLOC: Red color
+                          - BLOC: Rose color
                           - If no action assigned:
-                            * Red alert if ZKWD/ZEMB/APRV detected
+                            * Red alert if APRV detected
+                            * Orange alert if ZKWD/ZEMB/EMBF/EMBN detected
                             * Blue alert ("NO add") if E, F, G / address columns are blank or NO add in status
                         */}
                         {(() => {
@@ -2033,7 +2260,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           );
 
                           return (
-                            <div className={`lg:col-span-5 rounded-2xl p-5 flex flex-col justify-between transition-all ${boxTheme.containerClass}`}>
+                            <div className={`lg:col-span-5 flex flex-col justify-between transition-all ${
+                              uiPreset === 'compact' ? 'rounded-xl p-3.5' : uiPreset === 'auditor' ? 'rounded-xl p-4 border-2' : 'rounded-2xl p-5'
+                            } ${boxTheme.containerClass}`}>
                               <div className="space-y-3.5">
                                 
                                 {/* Header bar with Posnr & Alert/Country badges */}
@@ -2182,19 +2411,38 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         {/* 
                           BOX 2 (RIGHT / 7 Cols): RPL NAME (SCROLLABLE IF MANY, SEARCH BAR, EXACT MATCH HIGHLIGHTED IN RED)
                         */}
-                        <div className="lg:col-span-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs flex flex-col h-full min-h-0">
+                        <div className={`lg:col-span-7 flex flex-col h-full min-h-0 transition-all ${
+                          uiPreset === 'compact'
+                            ? 'rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs'
+                            : uiPreset === 'focus'
+                              ? 'rounded-2xl border-2 border-slate-700 bg-slate-900/95 text-slate-100 p-5 shadow-lg'
+                              : uiPreset === 'auditor'
+                                ? 'rounded-xl border-2 border-slate-300 bg-white p-4 shadow-2xs'
+                                : 'rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs'
+                        }`}>
                           
                           {/* RPL Header with search bar next to RPLname */}
-                          <div className="flex items-center justify-between pb-3 border-b border-slate-100 gap-2 flex-wrap sm:flex-nowrap flex-shrink-0">
+                          <div className={`flex items-center justify-between pb-3 border-b gap-2 flex-wrap sm:flex-nowrap flex-shrink-0 ${
+                            uiPreset === 'focus' ? 'border-slate-800' : 'border-slate-100'
+                          }`}>
                             <div className="flex items-center gap-2 flex-shrink-0">
-                              <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                              <h4 className={`text-xs font-bold uppercase tracking-wider ${
+                                uiPreset === 'focus' ? 'text-slate-200' : 'text-slate-800'
+                              }`}>
                                 RPL Name
                               </h4>
-                              <span className="text-xs font-semibold text-slate-500 tabular-nums">
+                              <span className={`text-xs font-semibold tabular-nums ${
+                                uiPreset === 'focus' ? 'text-slate-400' : 'text-slate-500'
+                              }`}>
                                 ({activeCase.rplEntries.length})
                               </span>
+                              {uiPreset === 'auditor' && (
+                                <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-300">
+                                  LEDGER
+                                </span>
+                              )}
                               {exactMatchCount > 0 && (
-                                <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">
+                                <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-100 text-red-700 border border-red-200 animate-pulse">
                                   {exactMatchCount} exact {exactMatchCount === 1 ? 'match' : 'matches'}
                                 </span>
                               )}
@@ -2202,13 +2450,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
                             {/* Search bar next to RPLname in tool */}
                             <div className="relative flex-1 max-w-xs min-w-[160px]">
-                              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                              <Search size={13} className={`absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none ${
+                                uiPreset === 'focus' ? 'text-slate-400' : 'text-slate-400'
+                              }`} />
                               <input
                                 type="text"
                                 value={rplSearchQuery}
                                 onChange={(e) => setRplSearchQuery(e.target.value)}
                                 placeholder="Search in RPL name..."
-                                className="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:bg-white transition-all placeholder:text-slate-400 text-slate-800"
+                                className={`w-full pl-8 pr-7 py-1.5 text-xs rounded-lg focus:outline-none transition-all placeholder:text-slate-400 ${
+                                  uiPreset === 'focus'
+                                    ? 'bg-slate-800 border border-slate-700 text-white focus:ring-1 focus:ring-amber-400 focus:bg-slate-800/90'
+                                    : 'bg-slate-50 border border-slate-200 text-slate-800 focus:ring-1 focus:ring-indigo-500 focus:bg-white'
+                                }`}
                               />
                               {rplSearchQuery && (
                                 <button
@@ -2234,7 +2488,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             className="mt-3 space-y-2 overflow-y-auto pr-1 scrollbar-thin flex-1 min-h-0"
                           >
                             {displayedRplEntries.length === 0 ? (
-                              <div className="p-8 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                              <div className={`p-8 text-center text-xs rounded-xl border border-dashed ${
+                                uiPreset === 'focus'
+                                  ? 'text-slate-400 bg-slate-850 border-slate-700'
+                                  : 'text-slate-400 bg-slate-50 border-slate-200'
+                              }`}>
                                 {rplSearchQuery.trim() ? (
                                   <div className="space-y-1">
                                     <p>No RPL Name matching &ldquo;{rplSearchQuery}&rdquo;</p>
@@ -2256,10 +2514,16 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   <div 
                                     key={idx}
                                     onDoubleClick={() => handleRplDoubleClick(rpl)}
-                                    className={`p-3 rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 group/rpl ${
+                                    className={`rounded-xl border transition-all text-xs flex flex-wrap items-center justify-between gap-2 group/rpl ${
+                                      uiPreset === 'compact' ? 'p-2.5' : 'p-3'
+                                    } ${
                                       isExact 
-                                        ? 'border-2 border-red-500 bg-red-50/90 text-red-950 font-bold shadow-2xs ring-1 ring-red-200' 
-                                        : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
+                                        ? 'border-2 border-red-500 bg-red-500/10 text-red-600 dark:text-red-300 font-bold shadow-2xs ring-2 ring-red-400/50' 
+                                        : uiPreset === 'focus'
+                                          ? 'border-slate-800 bg-slate-800/80 hover:bg-slate-800 hover:border-slate-600 text-slate-100 font-medium'
+                                          : uiPreset === 'auditor'
+                                            ? 'border-slate-300 bg-slate-50/80 hover:bg-white hover:border-indigo-400 text-slate-900 font-medium'
+                                            : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
                                     }`}
                                     title="Double-click RPL name to view SPL ID from Excel sheet"
                                   >
@@ -2269,9 +2533,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                           e.stopPropagation();
                                           handleRplDoubleClick(rpl);
                                         }}
-                                        className="break-words font-semibold select-text cursor-text group-hover/rpl:text-indigo-950 hover:underline"
+                                        className={`break-words font-semibold select-text cursor-text hover:underline ${
+                                          uiPreset === 'focus' ? 'group-hover/rpl:text-amber-300' : 'group-hover/rpl:text-indigo-950'
+                                        }`}
                                       >
-                                        {rpl.rplName || <span className="text-slate-300 italic font-normal">[Blank RPL Name]</span>}
+                                        {rpl.rplName || <span className="text-slate-400 italic font-normal">[Blank RPL Name]</span>}
                                       </span>
 
                                       {rpl.rplName && (
@@ -2284,7 +2550,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                           className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold border transition-all cursor-pointer shadow-2xs flex-shrink-0 ${
                                             copiedRplText === rpl.rplName
                                               ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                              : 'bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border-slate-200'
+                                              : uiPreset === 'focus'
+                                                ? 'bg-slate-700 hover:bg-slate-600 text-slate-200 border-slate-600'
+                                                : 'bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border-slate-200'
                                           }`}
                                           title="Copy RPL Name"
                                         >
@@ -2305,7 +2573,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
                                     <div className="flex items-center gap-1.5 flex-shrink-0">
                                       {isExact && (
-                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-2xs flex-shrink-0 animate-pulse">
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-xs flex-shrink-0 animate-pulse">
                                           <AlertCircle size={11} className="text-white" />
                                           Exact match found
                                         </span>
@@ -2322,15 +2590,27 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       </div>
 
                       {/* CLEAN ACTION DECISION BUTTONS */}
-                      <div className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5 flex-shrink-0">
+                      <div className={`transition-all flex-shrink-0 ${
+                        uiPreset === 'compact'
+                          ? 'p-2.5 rounded-xl border border-slate-200 bg-slate-50/70 space-y-1.5'
+                          : uiPreset === 'focus'
+                            ? 'p-3.5 rounded-xl border-2 border-slate-800 bg-slate-900 text-slate-100 space-y-2.5 shadow-md'
+                            : uiPreset === 'auditor'
+                              ? 'p-3 rounded-lg border-2 border-slate-300 bg-white space-y-2'
+                              : 'p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2.5'
+                      }`}>
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                          <span className={`text-xs font-bold uppercase tracking-wider ${
+                            uiPreset === 'focus' ? 'text-slate-200' : 'text-slate-800'
+                          }`}>
                             Compliance Decision
                           </span>
 
                           {activeCase.action && (
-                            <span className="text-xs text-slate-500 font-medium">
-                              Selected: <strong className="text-slate-900">{activeCase.action}</strong>
+                            <span className={`text-xs font-medium ${
+                              uiPreset === 'focus' ? 'text-slate-300' : 'text-slate-500'
+                            }`}>
+                              Selected: <strong className={uiPreset === 'focus' ? 'text-amber-400' : 'text-slate-900'}>{activeCase.action}</strong>
                             </span>
                           )}
                         </div>
@@ -2723,6 +3003,194 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-xs font-bold rounded-xl transition-colors cursor-pointer"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* UI PRESET / LAYOUT SELECTION MODAL */}
+      {showUiPresetModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setShowUiPresetModal(false)}
+        >
+          <div 
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-slate-900 to-indigo-950 text-white flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-500/20 border border-indigo-400/30 text-amber-300">
+                  <SlidersHorizontal size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white tracking-tight flex items-center gap-2">
+                    <span>Live Processing Layout Presets</span>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                      4 Options
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-300">
+                    Choose the visual styling and data density that matches your review speed and preference.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowUiPresetModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                title="Close"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Presets Grid */}
+            <div className="p-6 overflow-y-auto space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {LIVE_UI_PRESETS.map((preset) => {
+                  const isCurrent = uiPreset === preset.id;
+                  const IconComponent = 
+                    preset.id === 'modern' ? Layout :
+                    preset.id === 'compact' ? Layers :
+                    preset.id === 'focus' ? Monitor : Columns;
+
+                  return (
+                    <div
+                      key={preset.id}
+                      onClick={() => {
+                        setUiPreset(preset.id);
+                        try {
+                          localStorage.setItem('zyme_live_ui_preset', preset.id);
+                        } catch {
+                          // ignore storage errors
+                        }
+                      }}
+                      className={`relative rounded-xl border-2 p-4 cursor-pointer transition-all flex flex-col justify-between text-left group hover:shadow-md ${
+                        isCurrent
+                          ? 'border-indigo-600 bg-indigo-50/40 shadow-sm ring-2 ring-indigo-200'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60'
+                      }`}
+                    >
+                      <div>
+                        {/* Top bar with Icon, Title, Badge */}
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-2">
+                            <div className={`p-2 rounded-lg ${
+                              isCurrent
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-slate-100 text-slate-700 group-hover:bg-indigo-100 group-hover:text-indigo-700'
+                            } transition-colors`}>
+                              <IconComponent size={18} />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-900 group-hover:text-indigo-900 transition-colors">
+                                {preset.name}
+                              </h4>
+                              <p className="text-[11px] text-slate-500 font-medium leading-tight">
+                                {preset.tagline}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase ${
+                              preset.id === 'modern'
+                                ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                : preset.id === 'compact'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : preset.id === 'focus'
+                                    ? 'bg-slate-900 text-amber-300 border border-slate-700'
+                                    : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            }`}>
+                              {preset.badge}
+                            </span>
+                            {isCurrent && (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700">
+                                <Check size={12} strokeWidth={3} />
+                                Active
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        <p className="text-xs text-slate-600 mb-3 leading-relaxed">
+                          {preset.description}
+                        </p>
+
+                        {/* Highlights */}
+                        <div className="space-y-1 pt-2 border-t border-slate-100">
+                          {preset.highlights.map((h, i) => (
+                            <div key={i} className="flex items-center gap-1.5 text-[11px] text-slate-600">
+                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                                isCurrent ? 'bg-indigo-600' : 'bg-slate-400'
+                              }`} />
+                              <span>{h}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Footer button inside card */}
+                      <div className="mt-4 pt-3 border-t border-slate-100/80 flex items-center justify-between">
+                        <span className="text-[10px] font-mono font-medium text-slate-400">
+                          Key: {preset.id.toUpperCase()}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUiPreset(preset.id);
+                            try {
+                              localStorage.setItem('zyme_live_ui_preset', preset.id);
+                            } catch {
+                              // ignore
+                            }
+                            setShowUiPresetModal(false);
+                          }}
+                          className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            isCurrent
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700'
+                          }`}
+                        >
+                          {isCurrent ? 'Selected (Close)' : 'Use this Layout'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Informative Note Box */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex items-start gap-2.5">
+                <Sparkles size={16} className="text-indigo-600 flex-shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-slate-800">
+                    Decision Colors &amp; Exact Match highlighting persist across all layouts
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    In all layouts, <strong>ZKWD, EMBF, and EMBN</strong> are vibrantly styled in orange, <strong>APRV</strong> is the sole red action button, and 100% exact customer matches are highlighted with high-contrast red alerts.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3 flex-shrink-0">
+              <span className="text-xs text-slate-500">
+                Current mode: <strong className="text-slate-800 uppercase">{uiPreset}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowUiPresetModal(false)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-2xs"
+              >
+                Done
               </button>
             </div>
           </div>
