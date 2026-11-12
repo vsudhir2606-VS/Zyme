@@ -60,14 +60,14 @@ export const Processor: React.FC<ProcessorProps> = ({
     name: -1,
     match: -1,
     street: -1,
+    rplStreet1: -1,
+    rplStreet2: -1,
     city: -1,
     postalCode: -1,
     rplName: -1,
     typeOfList: -1,
     splId: -1,
     rplScreeningStatus: -1,
-    rplStreet1: -1,
-    rplStreet2: -1,
     state: -1,
   });
 

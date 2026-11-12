@@ -17,8 +17,8 @@ export const TARGET_ZYME_E4H_COLUMNS: TargetColumnDef[] = [
   { key: 'country', label: 'Country', colLetter: 'E', defaultHeader: 'Country' },
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'street', label: 'Street', colLetter: 'G', defaultHeader: 'street' },
-  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'H', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'I', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet1', label: 'RPL Street 1', colLetter: 'H', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet2', label: 'RPL Street 2', colLetter: 'I', defaultHeader: 'RplStreet1' },
   { key: 'city', label: 'City', colLetter: 'J', defaultHeader: 'city' },
   { key: 'postalCode', label: 'Postal Code', colLetter: 'K', defaultHeader: 'Postal Code' },
   { key: 'rplName', label: 'RPLname', colLetter: 'L', defaultHeader: 'RPLname' },
@@ -37,10 +37,10 @@ export const TARGET_ZYME_E4H_SHEET2_COLUMNS: TargetColumnDef[] = [
   { key: 'name', label: 'Name', colLetter: 'F', defaultHeader: 'name' },
   { key: 'match', label: 'Match', colLetter: 'G', defaultHeader: 'match' },
   { key: 'street', label: 'Street', colLetter: 'H', defaultHeader: 'street' },
-  { key: 'rplStreet1', label: 'RplStreet1', colLetter: 'I', defaultHeader: 'RplStreet1' },
-  { key: 'rplStreet2', label: 'RplStreet1 (2)', colLetter: 'J', defaultHeader: 'RplStreet1' },
-  { key: 'rplName', label: 'RPLname', colLetter: 'K', defaultHeader: 'RPLname' },
-  { key: 'city', label: 'City', colLetter: 'L', defaultHeader: 'city' },
+  { key: 'rplStreet1', label: 'RPL Street 1', colLetter: 'I', defaultHeader: 'RplStreet1' },
+  { key: 'rplStreet2', label: 'RPL Street 2', colLetter: 'J', defaultHeader: 'RplStreet1' },
+  { key: 'city', label: 'City', colLetter: 'K', defaultHeader: 'city' },
+  { key: 'rplName', label: 'RPLname', colLetter: 'L', defaultHeader: 'RPLname' },
   { key: 'postalCode', label: 'Postal Code', colLetter: 'M', defaultHeader: 'Postal Code' },
   { key: 'typeOfList', label: 'Type of List', colLetter: 'N', defaultHeader: 'Type of List' },
   { key: 'splId', label: 'SPL Id', colLetter: 'O', defaultHeader: 'SPL Id' },
@@ -57,14 +57,14 @@ export type TargetColumnKey =
   | 'name'
   | 'match'
   | 'street'
+  | 'rplStreet1'
+  | 'rplStreet2'
   | 'city'
   | 'postalCode'
   | 'rplName'
   | 'typeOfList'
   | 'splId'
   | 'rplScreeningStatus'
-  | 'rplStreet1'
-  | 'rplStreet2'
   | 'state';
 
 export type ZymeE4hColumnMapping = Record<TargetColumnKey, number>;
@@ -160,14 +160,14 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
     name: -1,
     match: -1,
     street: -1,
+    rplStreet1: -1,
+    rplStreet2: -1,
     city: -1,
     postalCode: -1,
     rplName: -1,
     typeOfList: -1,
     splId: -1,
     rplScreeningStatus: -1,
-    rplStreet1: -1,
-    rplStreet2: -1,
     state: -1,
   };
 
@@ -212,14 +212,17 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
     []
   );
 
+  const categoryExcludes = ['category', 'categ', 'bpcateg', 'bp', 'buspartner', 'partnercategory', 'buspartnercategory'];
+
   // 3. RPL Street 1 & 2 (must be matched before generic 'street')
+  // Exclude Bus.Partner Category and any category variants
   mapping.rplStreet1 = matchColumn(
-    ['rplstreet1', 'rplstreet', 'rpladdress1', 'rpladdress'],
-    ['street2', 'address2']
+    ['rplstreet1', 'rplstreet', 'rpladdress1', 'rpladdress', 'street2', 'address2'],
+    ['street2', 'address2', ...categoryExcludes]
   );
   mapping.rplStreet2 = matchColumn(
-    ['rplstreet2', 'rplstreet12', 'rpladdress2', 'rplstreet'],
-    []
+    ['rplstreet2', 'rplstreet12', 'rpladdress2', 'street3', 'address3', 'rplstreet'],
+    categoryExcludes
   );
 
   // 4. Type of List
@@ -240,10 +243,10 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
     []
   );
 
-  // 7. Partner ID
+  // 7. Partner ID (exclude name and category)
   mapping.partnerId = matchColumn(
-    ['partnerid', 'partner', 'partnerno', 'partnernumber', 'bp', 'businesspartner', 'custid', 'customerid', 'vendorid', 'partnerro'],
-    ['name']
+    ['partnerid', 'partner', 'partnerno', 'partnernumber', 'custid', 'customerid', 'vendorid', 'partnerro'],
+    ['name', ...categoryExcludes]
   );
 
   // 8. Country
@@ -255,13 +258,13 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
   // 9. Generic Name (exclude anything with 'rpl')
   mapping.name = matchColumn(
     ['name', 'name1', 'customername', 'partnername', 'entityname', 'companyname', 'clientname'],
-    ['rpl']
+    ['rpl', ...categoryExcludes]
   );
 
-  // 10. Generic Street (exclude anything with 'rpl')
+  // 10. Generic Street (exclude anything with 'rpl' and category)
   mapping.street = matchColumn(
     ['street', 'street1', 'address', 'stras', 'streetaddress'],
-    ['rpl']
+    ['rpl', ...categoryExcludes]
   );
 
   // 11. City
@@ -272,7 +275,7 @@ export const detectZymeE4hColumns = (headers: any[]): ZymeE4hColumnMapping => {
 
   // 12. Postal Code
   mapping.postalCode = matchColumn(
-    ['postalcode', 'postcode', 'postcode', 'zip', 'zipcode', 'pstlz', 'postal'],
+    ['postalcode', 'postcode', 'zip', 'zipcode', 'pstlz', 'postal'],
     []
   );
 
@@ -312,14 +315,14 @@ export const findHeaderRow = (rows: any[][]): { headerRowIndex: number; mapping:
     name: -1,
     match: -1,
     street: -1,
+    rplStreet1: -1,
+    rplStreet2: -1,
     city: -1,
     postalCode: -1,
     rplName: -1,
     typeOfList: -1,
     splId: -1,
     rplScreeningStatus: -1,
-    rplStreet1: -1,
-    rplStreet2: -1,
     state: -1,
   };
 
@@ -342,10 +345,11 @@ export const findHeaderRow = (rows: any[][]): { headerRowIndex: number; mapping:
     if (currentMapping.country !== -1) score += 2;
     if (currentMapping.city !== -1) score += 2;
     if (currentMapping.street !== -1) score += 2;
+    if (currentMapping.rplStreet1 !== -1) score += 2;
+    if (currentMapping.rplStreet2 !== -1) score += 2;
     if (currentMapping.postalCode !== -1) score += 2;
     if (currentMapping.splId !== -1) score += 2;
     if (currentMapping.rplScreeningStatus !== -1) score += 2;
-    if (currentMapping.rplStreet1 !== -1) score += 2;
     if (currentMapping.state !== -1) score += 2;
 
     if (score > bestScore) {
@@ -518,14 +522,14 @@ export const processZymeE4hFile = async (
     name: options?.customMapping?.name ?? detectedMapping.name,
     match: options?.customMapping?.match ?? -1,
     street: options?.customMapping?.street ?? detectedMapping.street,
+    rplStreet1: options?.customMapping?.rplStreet1 ?? detectedMapping.rplStreet1,
+    rplStreet2: options?.customMapping?.rplStreet2 ?? detectedMapping.rplStreet2,
     city: options?.customMapping?.city ?? detectedMapping.city,
     postalCode: options?.customMapping?.postalCode ?? detectedMapping.postalCode,
     rplName: options?.customMapping?.rplName ?? detectedMapping.rplName,
     typeOfList: options?.customMapping?.typeOfList ?? detectedMapping.typeOfList,
     splId: options?.customMapping?.splId ?? detectedMapping.splId,
     rplScreeningStatus: options?.customMapping?.rplScreeningStatus ?? detectedMapping.rplScreeningStatus,
-    rplStreet1: options?.customMapping?.rplStreet1 ?? detectedMapping.rplStreet1,
-    rplStreet2: options?.customMapping?.rplStreet2 ?? detectedMapping.rplStreet2,
     state: options?.customMapping?.state ?? detectedMapping.state,
   };
 
@@ -564,15 +568,19 @@ export const processZymeE4hFile = async (
     };
   });
 
-  // Build the final output header row
-  // 16 Target sorted headers (Column A through P)
-  const sortedHeaders: string[] = TARGET_ZYME_E4H_COLUMNS.map(t => t.defaultHeader);
+  // Build the final output header row for Sheet 1
+  // Columns A through P (16 Target sorted headers)
+  const targetSheet1Headers: string[] = TARGET_ZYME_E4H_COLUMNS.map(t => t.defaultHeader);
 
-  // Optionally include remaining source columns after Column P
   const includeRemaining = options?.includeRemainingColumns !== false;
+
+  // Output columns layout for Sheet 1:
+  // Indices 0..15: Columns A..P
+  // Indices 16+: Any unmapped source columns
+  const sortedHeaders: string[] = [...targetSheet1Headers];
   if (includeRemaining) {
-    unmappedSourceHeaders.forEach(unmapped => {
-      sortedHeaders.push(unmapped.headerName);
+    unmappedSourceHeaders.forEach(u => {
+      sortedHeaders.push(u.headerName);
     });
   }
 
@@ -850,8 +858,9 @@ export const processZymeE4hFile = async (
   // Step D: Build final sorted rows for Sheet 1 and Sheet 2
   const processedRows: any[][] = [sortedHeaders]; // Sheet 1 rows
 
-  // Sheet 2 Headers: Status, Posnr, Sequence No, Partner ID, Country, Name, Match, RPLname, Street, ...
-  const sheet2SortedHeaders: string[] = TARGET_ZYME_E4H_SHEET2_COLUMNS.map(t => t.defaultHeader);
+  // Sheet 2 Headers: Status, Posnr, Sequence No, Partner ID, Country, Name, Match, Street, RPL Street 1, RPL Street 2, City, RPLname, Postal Code, Type of List, SPL Id, RPL Screening Status, State
+  const targetSheet2Headers: string[] = TARGET_ZYME_E4H_SHEET2_COLUMNS.map(t => t.defaultHeader);
+  const sheet2SortedHeaders: string[] = [...targetSheet2Headers];
   if (includeRemaining) {
     unmappedSourceHeaders.forEach(unmapped => {
       sheet2SortedHeaders.push(unmapped.headerName);
@@ -876,11 +885,11 @@ export const processZymeE4hFile = async (
     sortedRow.push(mapping.country >= 0 ? (sourceRow[mapping.country] ?? '') : '');
     // Target Column F: Name (with Sequence No conditional blanking applied)
     sortedRow.push(record.finalNameValue);
-    // Target Column G: Street
+    // Target Column G: Street (Customer Street 1)
     sortedRow.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Target Column H: RplStreet1 (next to G column)
+    // Target Column H: Street 2 (RplStreet1)
     sortedRow.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Target Column I: RplStreet1 (2nd street column)
+    // Target Column I: Street 3 (RplStreet2)
     sortedRow.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
     // Target Column J: City
     sortedRow.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
@@ -897,7 +906,7 @@ export const processZymeE4hFile = async (
     // Target Column P: State
     sortedRow.push(mapping.state >= 0 ? (sourceRow[mapping.state] ?? '') : '');
 
-    // Append any unmapped remaining source columns if enabled
+    // Remaining unmapped source columns from Column Q onwards
     if (includeRemaining) {
       unmappedSourceHeaders.forEach(unmapped => {
         sortedRow.push(sourceRow[unmapped.colIndex] ?? '');
@@ -906,9 +915,8 @@ export const processZymeE4hFile = async (
     processedRows.push(sortedRow);
 
     // --- BUILD SHEET 2 ROW ---
-    // "sheet 2 must have status ,name & rpl data same as in first sheet format , but i need a column in between name & rpl called match"
     const sheet2Row: any[] = [];
-    // Col A: status (same as in first sheet format)
+    // Col A: status
     sheet2Row.push(record.statusValue);
     // Col B: Posnr
     sheet2Row.push(mapping.posnr >= 0 ? (sourceRow[mapping.posnr] ?? '') : '');
@@ -918,21 +926,20 @@ export const processZymeE4hFile = async (
     sheet2Row.push(mapping.partnerId >= 0 ? (sourceRow[mapping.partnerId] ?? '') : '');
     // Col E: Country
     sheet2Row.push(mapping.country >= 0 ? (sourceRow[mapping.country] ?? '') : '');
-    // Col F: Name (same as in first sheet format)
+    // Col F: Name
     sheet2Row.push(record.finalNameValue);
-    // Col G: match (compares customer name & rpl data, finds common keyword or Exact match)
+    // Col G: match
     sheet2Row.push(record.matchValue);
-    // Next to G column: All Street columns!
     // Col H: Street
     sheet2Row.push(mapping.street >= 0 ? (sourceRow[mapping.street] ?? '') : '');
-    // Col I: RplStreet1
+    // Col I: Street 2 (RplStreet1)
     sheet2Row.push(mapping.rplStreet1 >= 0 ? (sourceRow[mapping.rplStreet1] ?? '') : '');
-    // Col J: RplStreet1 (2nd street column)
+    // Col J: Street 3 (RplStreet2)
     sheet2Row.push(mapping.rplStreet2 >= 0 ? (sourceRow[mapping.rplStreet2] ?? '') : '');
-    // Col K: RPLname (rpl data same as in first sheet format)
-    sheet2Row.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
-    // Col L: City
+    // Col K: City
     sheet2Row.push(mapping.city >= 0 ? (sourceRow[mapping.city] ?? '') : '');
+    // Col L: RPLname
+    sheet2Row.push(mapping.rplName >= 0 ? (sourceRow[mapping.rplName] ?? '') : '');
     // Col M: Postal Code
     sheet2Row.push(mapping.postalCode >= 0 ? (sourceRow[mapping.postalCode] ?? '') : '');
     // Col N: Type of List
@@ -944,6 +951,7 @@ export const processZymeE4hFile = async (
     // Col Q: State
     sheet2Row.push(mapping.state >= 0 ? (sourceRow[mapping.state] ?? '') : '');
 
+    // Remaining unmapped source columns from Column R onwards
     if (includeRemaining) {
       unmappedSourceHeaders.forEach(unmapped => {
         sheet2Row.push(sourceRow[unmapped.colIndex] ?? '');

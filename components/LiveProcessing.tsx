@@ -35,7 +35,9 @@ import {
   Columns,
   Monitor,
   Layers,
-  Eye
+  Eye,
+  UserCheck,
+  Globe
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
@@ -315,6 +317,8 @@ export interface LiveProcessingCase {
   country: string;
   status: string;
   street?: string;
+  streetAll?: string;
+  streetDetails?: { label: string; value: string }[];
   city?: string;
   postalCode?: string;
   state?: string;
@@ -919,16 +923,60 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   };
 
-  // Close SPL ID Inspector on Escape key
+  // Selected Customer for Customer Details Modal (Double-click on Customer Name)
+  const [inspectingCustomer, setInspectingCustomer] = useState<{
+    name: string;
+    posnr: string;
+    partnerId?: string;
+    streetAll: string;
+    streetLines: { label: string; value: string }[];
+    city: string;
+    country: string;
+    state?: string;
+    postalCode?: string;
+    status?: string;
+    isNoAdd?: boolean;
+  } | null>(null);
+  const [copiedCustomerField, setCopiedCustomerField] = useState<string | null>(null);
+
+  const handleCustomerDoubleClick = (targetCase: LiveProcessingCase | null) => {
+    if (!targetCase) return;
+    const streetLines = targetCase.streetDetails && targetCase.streetDetails.length > 0
+      ? targetCase.streetDetails
+      : (targetCase.street ? [{ label: 'Street', value: targetCase.street }] : []);
+    
+    const streetAll = targetCase.streetAll || streetLines.map(l => l.value).join(', ') || targetCase.street || '';
+
+    setInspectingCustomer({
+      name: targetCase.customerName || '',
+      posnr: targetCase.posnr || '',
+      partnerId: targetCase.partnerId || '',
+      streetAll,
+      streetLines,
+      city: targetCase.city || '',
+      country: targetCase.country || '',
+      state: targetCase.state || '',
+      postalCode: targetCase.postalCode || '',
+      status: targetCase.status || '',
+      isNoAdd: targetCase.isNoAdd || (!targetCase.street && !targetCase.city && !targetCase.postalCode),
+    });
+    setCopiedCustomerField(null);
+  };
+
+  // Close Inspection Modals on Escape key
   useEffect(() => {
-    const handleSplModalKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && inspectingSplRpl) {
-        setInspectingSplRpl(null);
+    const handleModalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (inspectingCustomer) {
+          setInspectingCustomer(null);
+        } else if (inspectingSplRpl) {
+          setInspectingSplRpl(null);
+        }
       }
     };
-    window.addEventListener('keydown', handleSplModalKeyDown);
-    return () => window.removeEventListener('keydown', handleSplModalKeyDown);
-  }, [inspectingSplRpl]);
+    window.addEventListener('keydown', handleModalKeyDown);
+    return () => window.removeEventListener('keydown', handleModalKeyDown);
+  }, [inspectingCustomer, inspectingSplRpl]);
 
   // Sync saved SPL CC list across events (saving in LiveProcessing or modifying in Settings)
   useEffect(() => {
@@ -1065,13 +1113,45 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const buildCasesFromRows = (headers: string[], rows: any[][]) => {
     const posnrIdx = findCol(headers, ['posnr', 'item', 'line', 'refno']);
     const nameIdx = findCol(headers, ['name', 'customername', 'partnername'], ['rpl', 'file']);
-    const rplIdx = findCol(headers, ['rplname', 'rpl', 'sanctionedname', 'rpl1']);
+
+    // 1. Detect RPL Name column (Column L / 0-index 11 in clean Excel report)
+    // Strictly exclude street, address, screening, status, and category
+    let rplIdx = -1;
+    if (headers.length > 11) {
+      const h11 = headers[11].toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (
+        h11.includes('rpl') && 
+        !h11.includes('street') && 
+        !h11.includes('address') && 
+        !h11.includes('status') && 
+        !h11.includes('screening')
+      ) {
+        rplIdx = 11;
+      }
+    }
+    if (rplIdx === -1) {
+      // Look for specific RPL name tokens first
+      rplIdx = findCol(
+        headers,
+        ['rplname', 'sanctionedname', 'rplentity', 'rpllistname', 'rplcustomer', 'rplpartner', 'rplorg'],
+        ['street', 'address', 'screening', 'status', 'stat', 'category', 'categ']
+      );
+    }
+    if (rplIdx === -1) {
+      // Fallback matching, strictly excluding street, address, status, screening, category, score, etc.
+      rplIdx = findCol(
+        headers,
+        ['rpl', 'sanctioned', 'rpl1'],
+        ['street', 'address', 'screening', 'status', 'stat', 'score', 'date', 'action', 'review', 'partner', 'id', 'category', 'categ']
+      );
+    }
+
     const matchIdx = findCol(headers, ['match', 'keywordmatch', 'commonkeyword']);
     const statusIdx = findCol(headers, ['status', 'stat']);
     const seqIdx = findCol(headers, ['sequenceno', 'seqno', 'sequence']);
     const countryIdx = findCol(headers, ['country', 'land', 'ctr']);
-    const partnerIdIdx = findCol(headers, ['partnerid', 'partnerno', 'partner']);
-    const streetIdx = findCol(headers, ['street', 'address', 'address1'], ['rpl']);
+    const partnerIdIdx = findCol(headers, ['partnerid', 'partnerno', 'partner'], ['name', 'category', 'categ', 'buspartner']);
+    const streetIdx = findCol(headers, ['street', 'street1', 'address', 'address1'], ['rpl', 'category', 'categ']);
     const cityIdx = findCol(headers, ['city', 'town']);
     const postalCodeIdx = findCol(headers, ['postalcode', 'postcode', 'zip']);
     const typeOfListIdx = findCol(headers, ['typeoflist', 'listtype', 'list']);
@@ -1087,6 +1167,59 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     const stateIdx = findCol(headers, ['state', 'region', 'province']);
     const actionColIdx = findCol(headers, ['action', 'reviewaction', 'review']);
     const notesColIdx = findCol(headers, ['reviewnotes', 'notes', 'comment', 'comments', 'remark', 'remarks']);
+
+    // Collect all customer street/address column indices (Columns G, H, I in clean report and any address lines)
+    // Exclude category, BP category, Bus.Partner Category, RPL name, status, screening
+    const customerStreetCols: { header: string; idx: number }[] = [];
+    headers.forEach((h, idx) => {
+      if (
+        idx === rplIdx || 
+        idx === nameIdx || 
+        idx === posnrIdx || 
+        idx === statusIdx || 
+        idx === cityIdx || 
+        idx === countryIdx || 
+        idx === postalCodeIdx || 
+        idx === typeOfListIdx || 
+        idx === splIdIdx
+      ) {
+        return;
+      }
+      const hClean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (hClean.includes('screening') || hClean.includes('status') || hClean.includes('category') || hClean.includes('categ')) {
+        return;
+      }
+
+      // Check if this is Column G (idx 6), Column H (idx 7), or Column I (idx 8) with street data,
+      // or if the header indicates street/address
+      const isCleanReportStreetCol = (idx === 6 || idx === 7 || idx === 8) && (
+        hClean.includes('street') || 
+        hClean.includes('address') || 
+        hClean.includes('rplstreet') || 
+        hClean === 'g' || 
+        hClean === 'h' || 
+        hClean === 'i'
+      );
+
+      const isOtherStreetCol =
+        hClean.includes('street') || 
+        hClean.includes('address') || 
+        hClean.includes('stras') || 
+        hClean.includes('houseno') || 
+        hClean.includes('building');
+
+      if (isCleanReportStreetCol || isOtherStreetCol) {
+        let label = headers[idx] || `Street ${customerStreetCols.length + 1}`;
+        if (idx === 6 && (label.toLowerCase() === 'street' || label.toLowerCase() === 'street1')) {
+          label = 'Street 1';
+        } else if (idx === 7 || label.toLowerCase().includes('rplstreet1')) {
+          label = 'Street 2';
+        } else if (idx === 8 || label.toLowerCase().includes('rplstreet2')) {
+          label = 'Street 3';
+        }
+        customerStreetCols.push({ header: label, idx });
+      }
+    });
 
     const builtCases: LiveProcessingCase[] = [];
     let currentCase: LiveProcessingCase | null = null;
@@ -1112,6 +1245,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       const rawState = stateIdx >= 0 ? String(row[stateIdx] ?? '').trim() : '';
       const rawExistingAction = actionColIdx >= 0 ? String(row[actionColIdx] ?? '').trim() : '';
       const rawExistingNote = notesColIdx >= 0 ? String(row[notesColIdx] ?? '').trim() : '';
+
+      // Extract all street data present on this row
+      const rowStreetDetails: { label: string; value: string }[] = [];
+      customerStreetCols.forEach(({ header, idx }) => {
+        const val = String(row[idx] ?? '').trim();
+        if (val && !rowStreetDetails.some(d => d.value.toLowerCase() === val.toLowerCase())) {
+          rowStreetDetails.push({ label: header, value: val });
+        }
+      });
+      if (rawStreet && !rowStreetDetails.some(d => d.value.toLowerCase() === rawStreet.toLowerCase())) {
+        rowStreetDetails.unshift({ label: 'Street', value: rawStreet });
+      }
 
       const isSeqOne = rawSeq === '1' || rawSeq === '01' || rawSeq === '1.0';
       const posnrChanged = currentCase !== null && rawPosnr !== '' && rawPosnr !== currentCase.posnr;
@@ -1142,7 +1287,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           partnerId: rawPartnerId,
           country: rawCountry,
           status: rawStatus,
-          street: rawStreet,
+          street: rawStreet || (rowStreetDetails.length > 0 ? rowStreetDetails[0].value : ''),
+          streetAll: rowStreetDetails.map(d => d.value).join(', ') || rawStreet,
+          streetDetails: rowStreetDetails,
           city: rawCity,
           postalCode: rawPostalCode,
           state: rawState,
@@ -1151,6 +1298,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           notes: rawExistingNote || '',
         };
         caseCounter++;
+      } else if (rowStreetDetails.length > 0 && currentCase.streetDetails) {
+        rowStreetDetails.forEach(newDetail => {
+          if (!currentCase!.streetDetails!.some(d => d.value.toLowerCase() === newDetail.value.toLowerCase())) {
+            currentCase!.streetDetails!.push(newDetail);
+          }
+        });
+        currentCase.streetAll = currentCase.streetDetails.map(d => d.value).join(', ') || currentCase.street;
       }
 
       if (!currentCase.notes && rawExistingNote) {
@@ -2158,7 +2312,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                 </div>
                               </div>
 
-                              <p className={`text-xs font-semibold line-clamp-1 ${
+                              <p 
+                                onDoubleClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCustomerDoubleClick(c);
+                                }}
+                                title="Double-click to view complete Customer Details (Name, Street all data, City & Country)"
+                                className={`text-xs font-semibold line-clamp-1 cursor-pointer hover:underline transition-colors ${
                                 isRedItem
                                   ? 'text-red-950 font-bold'
                                   : isOrangeItem
@@ -2299,7 +2459,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                     Customer Name
                                   </label>
                                   <div className="flex flex-wrap items-center gap-2">
-                                    <h2 className={`text-lg sm:text-xl font-bold tracking-tight leading-snug break-words select-text ${boxTheme.nameClass}`}>
+                                    <h2 
+                                      onDoubleClick={() => handleCustomerDoubleClick(activeCase)}
+                                      title="Double-click to view Customer Details (Name, Street all data, City & Country)"
+                                      className={`text-lg sm:text-xl font-bold tracking-tight leading-snug break-words select-text cursor-pointer hover:underline transition-all ${boxTheme.nameClass}`}>
                                       {activeCase.customerName || (
                                         <span className="italic text-slate-400 font-normal">[No Customer Name on file]</span>
                                       )}
@@ -2328,6 +2491,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                         )}
                                       </button>
                                     )}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCustomerDoubleClick(activeCase)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-all cursor-pointer shadow-2xs"
+                                      title="Double-click name or click here to view Customer Details (Name, Street all data, City, Country)"
+                                    >
+                                      <Eye size={12} />
+                                      <span className="text-[11px]">Details</span>
+                                    </button>
                                     {activeCase.status && (
                                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-bold border shadow-2xs flex-shrink-0 ${boxTheme.statusBadgeClass}`}>
                                         Status: {activeCase.status}
@@ -2822,6 +2994,322 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         </div>
 
       </div>
+
+      {/* CUSTOMER DETAILS MODAL (triggered on double-clicking Customer Name or clicking Details button) */}
+      {inspectingCustomer && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setInspectingCustomer(null)}
+        >
+          <div 
+            className="relative w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-indigo-50/90 via-blue-50/80 to-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-500/20">
+                  <UserCheck size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                    Customer Details
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Posnr #{inspectingCustomer.posnr} {inspectingCustomer.partnerId ? `• Partner ID: ${inspectingCustomer.partnerId}` : ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setInspectingCustomer(null)}
+                className="p-1.5 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                title="Close (Esc)"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto scrollbar-thin">
+              {/* Customer Name */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-slate-500">
+                    Customer Name
+                  </span>
+                  {inspectingCustomer.name && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(inspectingCustomer.name);
+                        setCopiedCustomerField('name');
+                        setTimeout(() => setCopiedCustomerField(null), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                    >
+                      {copiedCustomerField === 'name' ? (
+                        <>
+                          <Check size={12} className="text-emerald-600" />
+                          <span className="text-emerald-600 font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                <p className="text-base font-bold text-slate-900 break-words select-text">
+                  {inspectingCustomer.name || <span className="italic text-slate-400 font-normal">No customer name on file</span>}
+                </p>
+                {inspectingCustomer.status && (
+                  <div className="mt-2 pt-2 border-t border-slate-200/60 flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Status:</span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-white text-slate-700 border border-slate-200 shadow-2xs">
+                      {inspectingCustomer.status}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Street All Data */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-slate-500">
+                    Street (All Data)
+                  </span>
+                  {inspectingCustomer.streetAll && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(inspectingCustomer.streetAll);
+                        setCopiedCustomerField('street');
+                        setTimeout(() => setCopiedCustomerField(null), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                    >
+                      {copiedCustomerField === 'street' ? (
+                        <>
+                          <Check size={12} className="text-emerald-600" />
+                          <span className="text-emerald-600 font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy Street</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {inspectingCustomer.streetLines && inspectingCustomer.streetLines.length > 0 ? (
+                  <div className="space-y-2 select-text">
+                    {/* Individual Street Lines */}
+                    {inspectingCustomer.streetLines.map((line, idx) => (
+                      <div key={idx} className="flex items-start justify-between text-xs bg-white p-2.5 rounded-xl border border-slate-200/60 shadow-2xs">
+                        <div className="flex-1 mr-2">
+                          <span className="text-[10px] uppercase font-bold text-indigo-600 block mb-0.5">
+                            {line.label}
+                          </span>
+                          <span className="font-medium text-slate-800 break-words">
+                            {line.value}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(line.value);
+                            setCopiedCustomerField(`street-${idx}`);
+                            setTimeout(() => setCopiedCustomerField(null), 2000);
+                          }}
+                          className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors cursor-pointer"
+                          title={`Copy ${line.label}`}
+                        >
+                          {copiedCustomerField === `street-${idx}` ? (
+                            <Check size={12} className="text-emerald-600" />
+                          ) : (
+                            <Copy size={12} />
+                          )}
+                        </button>
+                      </div>
+                    ))}
+
+                    {/* Combined Street Line if multiple lines exist */}
+                    {inspectingCustomer.streetLines.length > 1 && (
+                      <div className="pt-1.5 text-xs text-slate-600">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block mb-0.5">Full Combined Street:</span>
+                        <p className="font-semibold text-slate-900 bg-indigo-50/50 p-2 rounded-lg border border-indigo-100">
+                          {inspectingCustomer.streetAll}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : inspectingCustomer.streetAll ? (
+                  <p className="text-sm font-semibold text-slate-900 select-text">
+                    {inspectingCustomer.streetAll}
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="font-bold text-blue-700 bg-blue-100/90 px-2.5 py-1 rounded-lg border border-blue-200">
+                      NO add (Blank)
+                    </span>
+                    <span className="text-slate-400 italic">No street address provided in dataset</span>
+                  </div>
+                )}
+              </div>
+
+              {/* City & Country Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* City */}
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-bold tracking-wider uppercase text-slate-500">
+                      City
+                    </span>
+                    {inspectingCustomer.city && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(inspectingCustomer.city);
+                          setCopiedCustomerField('city');
+                          setTimeout(() => setCopiedCustomerField(null), 2000);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                      >
+                        {copiedCustomerField === 'city' ? (
+                          <Check size={12} className="text-emerald-600" />
+                        ) : (
+                          <Copy size={12} />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 select-text">
+                    <MapPin size={15} className="text-slate-400 flex-shrink-0" />
+                    <span className="text-sm font-bold text-slate-900">
+                      {inspectingCustomer.city || <span className="italic text-slate-400 font-normal">Blank / Unspecified</span>}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Country */}
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[11px] font-bold tracking-wider uppercase text-slate-500">
+                      Country
+                    </span>
+                    {inspectingCustomer.country && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(inspectingCustomer.country);
+                          setCopiedCustomerField('country');
+                          setTimeout(() => setCopiedCustomerField(null), 2000);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                      >
+                        {copiedCustomerField === 'country' ? (
+                          <Check size={12} className="text-emerald-600" />
+                        ) : (
+                          <Copy size={12} />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 select-text">
+                    <Globe size={15} className="text-indigo-600 flex-shrink-0" />
+                    <span className="text-sm font-bold text-slate-900">
+                      {inspectingCustomer.country ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-md font-mono font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                          {inspectingCustomer.country}
+                        </span>
+                      ) : (
+                        <span className="italic text-slate-400 font-normal">Blank / Unspecified</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Context (State, Postal Code, Partner ID) if available */}
+              {(inspectingCustomer.state || inspectingCustomer.postalCode || inspectingCustomer.partnerId) && (
+                <div className="p-3.5 rounded-2xl bg-white border border-slate-200/80 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-2">
+                    Additional Context
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+                    {inspectingCustomer.state && (
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">State/Province:</span>
+                        <span className="font-semibold text-slate-800">{inspectingCustomer.state}</span>
+                      </div>
+                    )}
+                    {inspectingCustomer.postalCode && (
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Postal Code:</span>
+                        <span className="font-semibold font-mono text-slate-800">{inspectingCustomer.postalCode}</span>
+                      </div>
+                    )}
+                    {inspectingCustomer.partnerId && (
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Partner ID:</span>
+                        <span className="font-semibold font-mono text-slate-800">{inspectingCustomer.partnerId}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  const summaryLines = [
+                    `Customer Name: ${inspectingCustomer.name || 'N/A'}`,
+                    `Street: ${inspectingCustomer.streetAll || (inspectingCustomer.isNoAdd ? 'NO add (Blank)' : 'N/A')}`,
+                    `City: ${inspectingCustomer.city || 'N/A'}`,
+                    `Country: ${inspectingCustomer.country || 'N/A'}`,
+                  ];
+                  if (inspectingCustomer.state) summaryLines.push(`State: ${inspectingCustomer.state}`);
+                  if (inspectingCustomer.postalCode) summaryLines.push(`Postal Code: ${inspectingCustomer.postalCode}`);
+                  if (inspectingCustomer.partnerId) summaryLines.push(`Partner ID: ${inspectingCustomer.partnerId}`);
+                  if (inspectingCustomer.posnr) summaryLines.push(`Posnr: ${inspectingCustomer.posnr}`);
+
+                  navigator.clipboard?.writeText(summaryLines.join('\n'));
+                  setCopiedCustomerField('all');
+                  setTimeout(() => setCopiedCustomerField(null), 2000);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-100/80 hover:bg-indigo-200/80 transition-colors cursor-pointer shadow-2xs"
+              >
+                {copiedCustomerField === 'all' ? (
+                  <>
+                    <Check size={14} className="text-emerald-700" strokeWidth={3} />
+                    <span className="text-emerald-800">All Details Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={14} />
+                    <span>Copy All Customer Details</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setInspectingCustomer(null)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* SPL ID INSPECTOR MODAL (shown when double-clicking RPL name or clicking SPL ID button) */}
       {inspectingSplRpl && (
