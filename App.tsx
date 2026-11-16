@@ -519,7 +519,7 @@ export default function App() {
                 {activeTab === 'processor' 
                   ? 'Enterprise compliance data processing and deduplication' 
                   : activeTab === 'consolidator'
-                  ? 'Consolidate all files into a single master report using 1 file header'
+                  ? 'Consolidate multiple files, filter USERSTATUS (Col Z), deduplicate Col A/B/C & filter Releasedate (Col Y)'
                   : activeTab === 'oof_consolidator'
                   ? 'Consolidate reports and attach source file name in Column A for all rows'
                   : activeTab === 'inventory'
