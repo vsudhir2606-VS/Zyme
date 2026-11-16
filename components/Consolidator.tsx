@@ -236,11 +236,8 @@ export const Consolidator: React.FC = () => {
   };
 
   const handleDownloadExcel = () => {
-    if (!processedResult) return;
-    const blob = new Blob([processedResult.data], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    });
-    const url = window.URL.createObjectURL(blob);
+    if (!processedResult || !processedResult.excelBlob) return;
+    const url = window.URL.createObjectURL(processedResult.excelBlob);
     const a = document.createElement('a');
     a.href = url;
     const dateTag =

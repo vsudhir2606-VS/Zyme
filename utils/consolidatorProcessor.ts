@@ -1,6 +1,8 @@
-import * as XLSX from 'xlsx';
-import './cptableSetup.ts';
-import { clampWorksheetRange, safeWriteXlsx } from './excelSafety.ts';
+import {
+  buildFastXlsxBlob,
+  streamSpreadsheetRows,
+  yieldToUi,
+} from './fastSpreadsheetStream.ts';
 
 export type DateFilterMode = 'today' | 'single' | 'range';
 
@@ -38,7 +40,7 @@ export class ConsolidationError extends Error {
 }
 
 export interface ConsolidationResult {
-  data: Uint8Array;
+  excelBlob: Blob;
   csvBlob: Blob;
   fileCount: number;
   rawRowCount: number;
@@ -91,13 +93,18 @@ export const getLocalTodayYmd = (): string => {
   return `${y}-${m}-${d}`;
 };
 
-const pad2 = (n: number): string => String(n).padStart(2, '0');
+const pad2 = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
+
+const DAYS_IN_MONTH = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 const formatYmd = (y: number, m: number, d: number): string | null => {
-  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return null;
-  if (y < 1900 || y > 2199 || m < 1 || m > 12 || d < 1 || d > 31) return null;
-  const check = new Date(y, m - 1, d);
-  if (check.getFullYear() !== y || check.getMonth() !== m - 1 || check.getDate() !== d) return null;
+  if ((y | 0) !== y || (m | 0) !== m || (d | 0) !== d) return null;
+  if (y < 1900 || y > 2199 || m < 1 || m > 12 || d < 1) return null;
+  let maxDay = DAYS_IN_MONTH[m];
+  if (m === 2 && ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0)) {
+    maxDay = 29;
+  }
+  if (d > maxDay) return null;
   return `${y}-${pad2(m)}-${pad2(d)}`;
 };
 
@@ -120,47 +127,69 @@ const MONTH_MAP: Record<string, number> = {
   dec: 12, december: 12,
 };
 
-/**
- * Detects whether slash-delimited dates in a column lean DMY vs MDY
- * by checking unambiguous rows (where one component > 12) or format string.
- */
-const inferSlashDateOrder = (samples: any[]): 'MDY' | 'DMY' => {
-  for (const val of samples) {
-    if (isExcelDateCellObj(val) && val.z) {
-      const zLower = val.z.toLowerCase();
-      const dPos = zLower.indexOf('d');
-      const mPos = zLower.indexOf('m');
-      if (dPos !== -1 && mPos !== -1) {
-        return dPos < mPos ? 'DMY' : 'MDY';
-      }
-    }
-    const str = formatCellDisplay(val).trim();
-    if (!str) continue;
-    const match = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})(?:\s|T|$)/);
-    if (match) {
-      const p1 = parseInt(match[1], 10);
-      const p2 = parseInt(match[2], 10);
-      if (p1 > 12 && p2 <= 12) return 'DMY';
-      if (p2 > 12 && p1 <= 12) return 'MDY';
+const RE_8DIGIT = /^\d{8}$/;
+const RE_5DIGIT_SERIAL = /^\d{5}(\.\d+)?$/;
+const RE_ISO_DATE = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[\sT]|$)/;
+const RE_DOT_DATE = /^(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:\s|T|$)/;
+const RE_D_MON_Y = /^(\d{1,2})[-\s/]([A-Za-z]{3,9})[-\s/,]+(\d{2,4})(?:\s|$)/;
+const RE_MON_D_Y = /^([A-Za-z]{3,9})[-\s/]+(\d{1,2})[,\s-]+(\d{2,4})(?:\s|$)/;
+const RE_SEP_DATE = /^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s|T|$)/;
+
+const inspectCellSlashOrder = (val: any): 'MDY' | 'DMY' | null => {
+  if (val === undefined || val === null || val === '') return null;
+  if (isExcelDateCellObj(val) && val.z) {
+    const zLower = val.z.toLowerCase();
+    const dPos = zLower.indexOf('d');
+    const mPos = zLower.indexOf('m');
+    if (dPos !== -1 && mPos !== -1) {
+      return dPos < mPos ? 'DMY' : 'MDY';
     }
   }
-  return 'MDY';
+  const str = fastCellDisplay(val).trim();
+  if (!str) return null;
+  const match = RE_SEP_DATE.exec(str);
+  if (match) {
+    const p1 = parseInt(match[1], 10);
+    const p2 = parseInt(match[3], 10);
+    if (p1 > 12 && p2 <= 12) return 'DMY';
+    if (p2 > 12 && p1 <= 12) return 'MDY';
+  }
+  return null;
+};
+
+const isAmbiguousSlashString = (val: any): boolean => {
+  if (typeof val !== 'string') return false;
+  const str = val.trim();
+  const match = RE_SEP_DATE.exec(str);
+  if (!match) return false;
+  if (match[2] !== '/') return false;
+  const p1 = parseInt(match[1], 10);
+  const p2 = parseInt(match[3], 10);
+  return p1 >= 1 && p1 <= 12 && p2 >= 1 && p2 <= 12 && p1 !== p2;
+};
+
+const excelSerialToYmd = (serial: number): string | null => {
+  if (!Number.isFinite(serial) || serial < 1 || serial >= 2958466) return null;
+  const wholeDays = Math.floor(serial + 1e-9);
+  if (wholeDays === 60) return '1900-02-29';
+  const epochOffset = wholeDays < 60 ? 25568 : 25569; // 1900-01-01..1900-02-28 vs >=1900-03-01 (Excel epoch 1899-12-30 UTC)
+  const utcMs = (wholeDays - epochOffset) * 86400000;
+  const dt = new Date(utcMs);
+  if (isNaN(dt.getTime())) return null;
+  return formatYmd(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
 };
 
 /**
  * Parses an Excel cell (serial number, cell object, Date, or formatted string) into YYYY-MM-DD.
- * Uses XLSX.SSF.parse_date_code for Excel serials to guarantee 100% timezone immunity
- * (avoiding SheetJS cellDates:true historical LMT offset bugs in IST and other timezones).
+ * Uses pure UTC Excel epoch arithmetic for Excel serials to guarantee 100% timezone & ESM immunity.
  */
 export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): string | null => {
   if (val === undefined || val === null || val === '') return null;
 
   // 1. Excel cell object with serial number
   if (isExcelDateCellObj(val)) {
-    const parsed = XLSX.SSF.parse_date_code(val.v);
-    if (parsed && parsed.y && parsed.m && parsed.d) {
-      return formatYmd(parsed.y, parsed.m, parsed.d);
-    }
+    const serialYmd = excelSerialToYmd(val.v);
+    if (serialYmd) return serialYmd;
     if (val.w) {
       return parseCellToYmd(val.w, slashOrder);
     }
@@ -172,7 +201,7 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     return formatYmd(val.getFullYear(), val.getMonth() + 1, val.getDate());
   }
 
-  // 3. Raw Excel serial number (e.g. 46342 or 46342.5) vs numeric YYYYMMDD (e.g. 20261116)
+  // 3. Raw Excel serial number or numeric YYYYMMDD
   if (typeof val === 'number' && Number.isFinite(val)) {
     if (val >= 19000101 && val <= 21991231 && Number.isInteger(val)) {
       const s = String(val);
@@ -182,39 +211,30 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
         parseInt(s.slice(6, 8), 10)
       );
     }
-    if (val >= 1 && val < 2958466) {
-      const parsed = XLSX.SSF.parse_date_code(val);
-      if (parsed && parsed.y && parsed.m && parsed.d) {
-        return formatYmd(parsed.y, parsed.m, parsed.d);
-      }
-    }
-    return null;
+    return excelSerialToYmd(val);
   }
 
   // 4. String formats
   const str = String(val).trim();
   if (!str) return null;
 
-  // Numeric string Excel serial (e.g. "46342") or YYYYMMDD ("20261116")
-  if (/^\d{8}$/.test(str)) {
+  if (RE_8DIGIT.test(str)) {
     const y = parseInt(str.slice(0, 4), 10);
     const m = parseInt(str.slice(4, 6), 10);
     const d = parseInt(str.slice(6, 8), 10);
     const ymd = formatYmd(y, m, d);
     if (ymd) return ymd;
   }
-  if (/^\d{5}(\.\d+)?$/.test(str)) {
+
+  if (RE_5DIGIT_SERIAL.test(str)) {
     const num = parseFloat(str);
     if (num >= 20000 && num < 100000) {
-      const parsed = XLSX.SSF.parse_date_code(num);
-      if (parsed && parsed.y && parsed.m && parsed.d) {
-        return formatYmd(parsed.y, parsed.m, parsed.d);
-      }
+      const serialYmd = excelSerialToYmd(num);
+      if (serialYmd) return serialYmd;
     }
   }
 
-  // ISO-like YYYY-MM-DD / YYYY/MM/DD / YYYY.MM.DD (with optional time)
-  const isoMatch = str.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[\sT]|$)/);
+  const isoMatch = RE_ISO_DATE.exec(str);
   if (isoMatch) {
     return formatYmd(
       parseInt(isoMatch[1], 10),
@@ -223,8 +243,7 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     );
   }
 
-  // Dot-delimited DD.MM.YYYY or DD.MM.YY (SAP standard format)
-  const dotMatch = str.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:\s|T|$)/);
+  const dotMatch = RE_DOT_DATE.exec(str);
   if (dotMatch) {
     const d = parseInt(dotMatch[1], 10);
     const m = parseInt(dotMatch[2], 10);
@@ -233,8 +252,7 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     return formatYmd(y, m, d) || formatYmd(y, d, m);
   }
 
-  // Named month: DD-MMM-YYYY or DD MMM YYYY (e.g., 16-Nov-2026)
-  const dMonY = str.match(/^(\d{1,2})[-\s/]([A-Za-z]{3,9})[-\s/,]+(\d{2,4})(?:\s|$)/);
+  const dMonY = RE_D_MON_Y.exec(str);
   if (dMonY) {
     const d = parseInt(dMonY[1], 10);
     const m = MONTH_MAP[dMonY[2].toLowerCase()];
@@ -243,8 +261,7 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     if (m) return formatYmd(y, m, d);
   }
 
-  // Named month: MMM DD, YYYY (e.g., Nov 16, 2026)
-  const monDY = str.match(/^([A-Za-z]{3,9})[-\s/]+(\d{1,2})[,\s-]+(\d{2,4})(?:\s|$)/);
+  const monDY = RE_MON_D_Y.exec(str);
   if (monDY) {
     const m = MONTH_MAP[monDY[1].toLowerCase()];
     const d = parseInt(monDY[2], 10);
@@ -253,8 +270,7 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     if (m) return formatYmd(y, m, d);
   }
 
-  // Slash or hyphen: MM/DD/YYYY vs DD/MM/YYYY
-  const sepMatch = str.match(/^(\d{1,2})([/-])(\d{1,2})\2(\d{2,4})(?:\s|T|$)/);
+  const sepMatch = RE_SEP_DATE.exec(str);
   if (sepMatch) {
     const p1 = parseInt(sepMatch[1], 10);
     const sep = sepMatch[2];
@@ -265,14 +281,12 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
     if (p1 > 12) return formatYmd(y, p2, p1);
     if (p2 > 12) return formatYmd(y, p1, p2);
 
-    // Ambiguous (both <= 12): respect inferred column order, or default DMY for '-' / MDY for '/'
     const order = slashOrder === 'DMY' || sep === '-' ? 'DMY' : 'MDY';
     return order === 'DMY'
       ? (formatYmd(y, p2, p1) || formatYmd(y, p1, p2))
       : (formatYmd(y, p1, p2) || formatYmd(y, p2, p1));
   }
 
-  // Last-resort Date.parse fallback for other localized date strings
   const nativeParsed = new Date(str);
   if (!isNaN(nativeParsed.getTime())) {
     return formatYmd(nativeParsed.getFullYear(), nativeParsed.getMonth() + 1, nativeParsed.getDate());
@@ -281,25 +295,15 @@ export const parseCellToYmd = (val: any, slashOrder: 'MDY' | 'DMY' = 'MDY'): str
   return null;
 };
 
-/**
- * Formats any cell value (primitive, Date, or ExcelCellValue) into a clean display string
- * for preview, CSV export, and key comparisons.
- */
-const formatCellDisplay = (val: any): string => {
-  if (val === undefined || val === null) return '';
+const fastCellDisplay = (val: any): string => {
+  if (val === undefined || val === null || val === '') return '';
+  const t = typeof val;
+  if (t === 'string') return val;
+  if (t === 'number' || t === 'boolean') return String(val);
   if (isExcelDateCellObj(val)) {
-    if (val.w && String(val.w).trim() !== '') return String(val.w);
-    if (val.z) {
-      try {
-        return XLSX.SSF.format(val.z, val.v);
-      } catch {
-        // fallback below
-      }
-    }
-    const parsed = XLSX.SSF.parse_date_code(val.v);
-    if (parsed && parsed.y && parsed.m && parsed.d) {
-      return `${parsed.y}-${pad2(parsed.m)}-${pad2(parsed.d)}`;
-    }
+    if (val.w && val.w.trim() !== '') return val.w;
+    const serialYmd = excelSerialToYmd(val.v);
+    if (serialYmd) return serialYmd;
     return String(val.v);
   }
   if (val instanceof Date && !isNaN(val.getTime())) {
@@ -308,23 +312,8 @@ const formatCellDisplay = (val: any): string => {
   return String(val);
 };
 
-const clampExcelCell = (val: any): any => {
-  if (val === undefined || val === null) return '';
-  if (isExcelDateCellObj(val)) {
-    return { t: 'n', v: val.v, z: val.z || 'yyyy-mm-dd' };
-  }
-  if (val instanceof Date) return val;
-  if (typeof val === 'object') {
-    return String(val.v ?? val.text ?? val.w ?? '');
-  }
-  if (typeof val === 'string' && val.length > 32750) {
-    return val.slice(0, 32750) + '... [truncated]';
-  }
-  return val;
-};
-
 const escapeCsvCell = (val: any): string => {
-  const str = formatCellDisplay(val);
+  const str = fastCellDisplay(val);
   if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -335,67 +324,11 @@ const normHeader = (h: any): string => {
   return String(h ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 };
 
-/**
- * Extracts rows from a SheetJS worksheet while preserving date cell metadata ({t:'n', v, z, w})
- * and ignoring timezone-sensitive cellDates conversions.
- */
-const extractRowsPreservingFormats = (worksheet: XLSX.WorkSheet): any[][] => {
-  clampWorksheetRange(worksheet);
-  const ref = worksheet['!ref'];
-  if (!ref) return [];
-
-  const range = XLSX.utils.decode_range(ref);
-  const rows: any[][] = [];
-  // Always anchor columns at Excel Column A (index 0) so Col A, B, C, Y (24), Z (25) never shift
-  const maxColIndex = Math.min(199, range.e.c);
-  const totalCols = maxColIndex + 1;
-  const denseData = (worksheet as any)['!data'];
-
-  for (let r = range.s.r; r <= range.e.r; r++) {
-    const row: any[] = new Array(totalCols).fill('');
-    let hasValue = false;
-
-    for (let c = 0; c <= maxColIndex; c++) {
-      const cell = denseData
-        ? denseData[r]?.[c]
-        : worksheet[XLSX.utils.encode_cell({ r, c })];
-
-      if (!cell || cell.v === undefined || cell.v === null) continue;
-
-      if (cell.t === 'n' && typeof cell.v === 'number' && cell.z && XLSX.SSF.is_date(cell.z)) {
-        row[c] = {
-          t: 'n',
-          v: cell.v,
-          z: cell.z,
-          w: cell.w,
-        } as ExcelCellValue;
-        hasValue = true;
-      } else {
-        const v = cell.v;
-        if (String(v).trim() !== '') {
-          hasValue = true;
-        }
-        row[c] = clampExcelCell(v);
-      }
-    }
-
-    if (hasValue) {
-      rows.push(row);
-    }
-  }
-
-  return rows;
-};
-
-/**
- * Resolves Column Z (USERSTATUS, 0-index 25) and Column Y (Releasedate, 0-index 24).
- */
 const resolveRequiredColumns = (
   headers: string[]
 ): { userStatusIdx: number; releaseDateIdx: number } => {
   const normHeaders = headers.map(normHeader);
 
-  // USERSTATUS (Column Z = index 25)
   let userStatusIdx = -1;
   if (normHeaders.length > 25 && (normHeaders[25] === 'userstatus' || normHeaders[25].includes('userstatus'))) {
     userStatusIdx = 25;
@@ -408,7 +341,6 @@ const resolveRequiredColumns = (
     }
   }
 
-  // Releasedate (Column Y = index 24)
   let releaseDateIdx = -1;
   if (normHeaders.length > 24 && (normHeaders[24] === 'releasedate' || normHeaders[24].includes('releasedate'))) {
     releaseDateIdx = 24;
@@ -424,9 +356,73 @@ const resolveRequiredColumns = (
   return { userStatusIdx, releaseDateIdx };
 };
 
+const buildColumnMapToMaster = (
+  fileHeaders: string[],
+  masterHeaders: string[]
+): { srcForMasterCol: number[]; isIdentity: boolean } => {
+  const colIndexMap: number[] = new Array(fileHeaders.length).fill(-1);
+  const usedMasterCols = new Set<number>();
+
+  // First pass: exact header match (preserving order for repeated header names)
+  for (let srcIdx = 0; srcIdx < fileHeaders.length; srcIdx++) {
+    const normH = fileHeaders[srcIdx].trim().toLowerCase();
+    for (let mIdx = 0; mIdx < masterHeaders.length; mIdx++) {
+      if (!usedMasterCols.has(mIdx) && masterHeaders[mIdx].trim().toLowerCase() === normH) {
+        colIndexMap[srcIdx] = mIdx;
+        usedMasterCols.add(mIdx);
+        break;
+      }
+    }
+  }
+
+  // Second pass: positional fallback for any unmatched columns
+  for (let srcIdx = 0; srcIdx < fileHeaders.length; srcIdx++) {
+    if (colIndexMap[srcIdx] === -1 && srcIdx < masterHeaders.length && !usedMasterCols.has(srcIdx)) {
+      colIndexMap[srcIdx] = srcIdx;
+      usedMasterCols.add(srcIdx);
+    }
+  }
+
+  const srcForMasterCol = new Array<number>(masterHeaders.length).fill(-1);
+  for (let srcIdx = 0; srcIdx < colIndexMap.length; srcIdx++) {
+    const target = colIndexMap[srcIdx];
+    if (target >= 0 && target < masterHeaders.length && srcForMasterCol[target] === -1) {
+      srcForMasterCol[target] = srcIdx;
+    }
+  }
+
+  let isIdentity = fileHeaders.length >= masterHeaders.length;
+  if (isIdentity) {
+    for (let m = 0; m < masterHeaders.length; m++) {
+      if (srcForMasterCol[m] !== m) {
+        isIdentity = false;
+        break;
+      }
+    }
+  }
+
+  return { srcForMasterCol, isIdentity };
+};
+
+const isRepeatedHeaderRow = (
+  row: any[],
+  fileHeadersLower: string[],
+  masterHeadersLower: string[]
+): boolean => {
+  for (let c = 0; c < row.length; c++) {
+    const strVal = fastCellDisplay(row[c]).trim().toLowerCase();
+    if (!strVal) continue;
+    const selfMatch = c < fileHeadersLower.length && strVal === fileHeadersLower[c];
+    const masterMatch = c < masterHeadersLower.length && strVal === masterHeadersLower[c];
+    if (!selfMatch && !masterMatch) return false;
+  }
+  return true;
+};
+
 /**
- * Zyme Consolidator Engine (New Pipeline):
- * 1. Consolidates all uploaded files using File 1's header (strict validation: popup error if any file fails).
+ * Zyme Consolidator Engine (High-Speed Streaming Pipeline):
+ * Capable of processing 1,000,000+ rows across large XLSX/CSV files in a single streaming pass.
+ * 1. Consolidates all uploaded files using File 1's header (strict validation).
  * 2. Step 1: Filter USERSTATUS (Column Z) -> Remove blank rows & keep non-blank rows.
  * 3. Step 2: Deduplicate -> Remove duplicates across Columns A, B, and C.
  * 4. Step 3: Filter Releasedate (Column Y) -> Match Today (default), Single Date, or From–To Date Range.
@@ -483,34 +479,36 @@ export const consolidateFiles = async (
   const warnings: string[] = [];
   const failedFiles: FailedFileDetail[] = [];
 
-  interface ParsedFile {
+  interface ValidatedFileMeta {
     file: File;
-    rows: any[][];
     headers: string[];
+    headersLower: string[];
+    headerRowIndex: number;
+    slashOrder: 'MDY' | 'DMY' | null;
+    userStatusIdx: number;
+    releaseDateIdx: number;
   }
-  const parsedFiles: ParsedFile[] = [];
 
-  // Phase 1: Read and validate EVERY uploaded file
+  const validatedMetas: ValidatedFileMeta[] = [];
+
+  // Phase 1: Ultra-fast preflight check (streams only first ~500 rows per file to validate columns & date order)
   for (let fileIdx = 0; fileIdx < totalFiles; fileIdx++) {
     if (signal?.aborted) {
       throw new Error('Consolidation was cancelled by the user.');
     }
 
     const file = files[fileIdx];
-
     if (onProgress) {
-      const readPercent = Math.min(45, Math.round(((fileIdx + 1) / totalFiles) * 45));
       onProgress({
         currentFile: fileIdx + 1,
         totalFiles,
-        fileName: file.name,
+        fileName: `Validating ${file.name}...`,
         totalRows: 0,
-        percent: readPercent,
+        percent: Math.min(12, Math.round(((fileIdx + 1) / totalFiles) * 12)),
         stage: 'reading',
       });
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await yieldToUi();
 
     if (file.size === 0) {
       failedFiles.push({
@@ -522,57 +520,41 @@ export const consolidateFiles = async (
     }
 
     try {
-      const data = await file.arrayBuffer();
-      const uint8 = new Uint8Array(data);
+      let headers: string[] | null = null;
+      let headerRowIndex = -1;
+      let dataRowCount = 0;
+      let localReleaseIdx = -1;
+      let detectedSlashOrder: 'MDY' | 'DMY' | null = null;
 
-      let tempWb: XLSX.WorkBook | null = null;
+      await streamSpreadsheetRows(
+        file,
+        (row, rowIdx) => {
+          if (headers === null) {
+            headers = row.map((c, i) => {
+              const val = fastCellDisplay(c).trim();
+              return val ? val : `Column_${i + 1}`;
+            });
+            headerRowIndex = rowIdx;
+            const resolved = resolveRequiredColumns(headers);
+            localReleaseIdx = resolved.releaseDateIdx;
+            return;
+          }
 
-      try {
-        tempWb = XLSX.read(uint8, {
-          type: 'array',
-          cellDates: false,
-          cellNF: true,
-          cellText: true,
-          cellHTML: false,
-          cellFormula: false,
-        });
-      } catch (_binErr) {
-        try {
-          const text = await file.text();
-          tempWb = XLSX.read(text, { type: 'string', cellDates: false, cellNF: true });
-        } catch (textErr: any) {
-          failedFiles.push({
-            fileName: file.name,
-            fileSize: file.size,
-            reason: `Unsupported format or corrupted spreadsheet: ${textErr?.message || 'Read error'}`,
-          });
-          continue;
-        }
-      }
+          dataRowCount++;
+          if (localReleaseIdx >= 0 && localReleaseIdx < row.length && detectedSlashOrder === null) {
+            const hint = inspectCellSlashOrder(row[localReleaseIdx]);
+            if (hint) detectedSlashOrder = hint;
+          }
 
-      if (!tempWb || !tempWb.SheetNames || !tempWb.SheetNames.length) {
-        failedFiles.push({
-          fileName: file.name,
-          fileSize: file.size,
-          reason: 'Workbook contains no readable sheets or tabs.',
-        });
-        continue;
-      }
+          // Stop early once we have at least 1 data row AND slash order (or sampled 400 rows)
+          if (dataRowCount >= 400 || (dataRowCount >= 1 && detectedSlashOrder !== null)) {
+            return false;
+          }
+        },
+        { maxRows: 410, signal }
+      );
 
-      const sheetName = tempWb.SheetNames[0];
-      const worksheet = tempWb.Sheets[sheetName];
-      if (!worksheet) {
-        failedFiles.push({
-          fileName: file.name,
-          fileSize: file.size,
-          reason: `Sheet "${sheetName}" is empty or could not be loaded.`,
-        });
-        continue;
-      }
-
-      const nonEmptyRows = extractRowsPreservingFormats(worksheet);
-
-      if (nonEmptyRows.length === 0) {
+      if (!headers || headers.length === 0) {
         failedFiles.push({
           fileName: file.name,
           fileSize: file.size,
@@ -581,7 +563,7 @@ export const consolidateFiles = async (
         continue;
       }
 
-      if (nonEmptyRows.length === 1) {
+      if (dataRowCount === 0) {
         failedFiles.push({
           fileName: file.name,
           fileSize: file.size,
@@ -590,13 +572,6 @@ export const consolidateFiles = async (
         continue;
       }
 
-      const rawHeaderRow = nonEmptyRows[0];
-      const headers = rawHeaderRow.map((c, i) => {
-        const val = formatCellDisplay(c).trim();
-        return val ? val : `Column_${i + 1}`;
-      });
-
-      // Validate that Columns A, B, C and Column Y (Releasedate) / Column Z (USERSTATUS) exist
       if (headers.length < 3) {
         failedFiles.push({
           fileName: file.name,
@@ -619,22 +594,26 @@ export const consolidateFiles = async (
         continue;
       }
 
-      parsedFiles.push({
+      validatedMetas.push({
         file,
-        rows: nonEmptyRows,
         headers,
+        headersLower: headers.map((h) => h.trim().toLowerCase()),
+        headerRowIndex,
+        slashOrder: detectedSlashOrder,
+        userStatusIdx,
+        releaseDateIdx,
       });
     } catch (err: any) {
+      if (err?.message?.includes('cancelled')) throw err;
       console.error(`Error reading file ${file.name}:`, err);
       failedFiles.push({
         fileName: file.name,
         fileSize: file.size,
-        reason: err.message || 'Failed to parse file.',
+        reason: err?.message || 'Failed to parse file.',
       });
     }
   }
 
-  // Strict check: ALL files must be consolidated
   if (failedFiles.length > 0) {
     const errorMsg =
       failedFiles.length === 1
@@ -643,253 +622,352 @@ export const consolidateFiles = async (
     throw new ConsolidationError(errorMsg, failedFiles);
   }
 
-  if (parsedFiles.length === 0) {
+  if (validatedMetas.length === 0) {
     throw new ConsolidationError('None of the selected files could be parsed or all were empty.', failedFiles);
   }
 
-  // Phase 2: Master Header from File 1 (preserving exact A, B, C ... Y, Z column layout)
-  const firstParsedFile = parsedFiles[0];
-  const primaryHeaderSourceFileName = firstParsedFile.file.name;
-  const masterHeaders = [...firstParsedFile.headers];
+  // Phase 2: Master Header from File 1
+  const primaryHeaderSourceFileName = validatedMetas[0].file.name;
+  const masterHeaders = [...validatedMetas[0].headers];
+  const masterHeadersLower = [...validatedMetas[0].headersLower];
+  const masterColCount = masterHeaders.length;
   const { userStatusIdx, releaseDateIdx } = resolveRequiredColumns(masterHeaders);
 
   const userStatusColumnName = masterHeaders[userStatusIdx] || 'USERSTATUS (Col Z)';
   const releaseDateColumnName = masterHeaders[releaseDateIdx] || 'Releasedate (Col Y)';
 
-  // Phase 3: Align all files under File 1's header & apply Step 1 (Filter USERSTATUS Col Z non-blank)
-  interface TaggedRow {
-    fileIdx: number;
-    cells: any[];
-  }
-
+  // Global Funnel Counters & State
   let totalRawRowCount = 0;
   let removedBlankUserStatusCount = 0;
-  const afterUserStatusRows: TaggedRow[] = [];
+  let afterUserStatusCount = 0;
+  let removedDuplicatesCount = 0;
+  let afterDeduplicationCount = 0;
+  let removedOutsideDateCount = 0;
 
-  const fileRawCounts = new Array<number>(parsedFiles.length).fill(0);
-  const fileAfterStatusCounts = new Array<number>(parsedFiles.length).fill(0);
-  const fileFinalCounts = new Array<number>(parsedFiles.length).fill(0);
+  const seenABCKeys = new Set<string>();
+  const detectedDatesSet = new Set<string>();
+  const finalKeptRows: any[][] = [];
 
-  for (let pIdx = 0; pIdx < parsedFiles.length; pIdx++) {
+  const fileRawCounts = new Array<number>(validatedMetas.length).fill(0);
+  const fileAfterStatusCounts = new Array<number>(validatedMetas.length).fill(0);
+  const fileFinalCounts = new Array<number>(validatedMetas.length).fill(0);
+
+  // Phase 3: Single-Pass Streaming Consolidation across all files
+  for (let fIdx = 0; fIdx < validatedMetas.length; fIdx++) {
     if (signal?.aborted) {
       throw new Error('Consolidation was cancelled by the user.');
     }
 
-    const pf = parsedFiles[pIdx];
-    const { file, rows, headers } = pf;
+    const meta = validatedMetas[fIdx];
+    const { srcForMasterCol, isIdentity } = buildColumnMapToMaster(meta.headers, masterHeaders);
+
+    const srcColA = srcForMasterCol[0];
+    const srcColB = srcForMasterCol[1];
+    const srcColC = srcForMasterCol[2];
+    const srcUserStatus = srcForMasterCol[userStatusIdx] !== -1 ? srcForMasterCol[userStatusIdx] : meta.userStatusIdx;
+    const srcReleaseDate = srcForMasterCol[releaseDateIdx] !== -1 ? srcForMasterCol[releaseDateIdx] : meta.releaseDateIdx;
+
+    // Track per-file slash order; if null after preflight, temporarily hold ONLY ambiguous slash rows until resolved
+    let activeSlashOrder: 'MDY' | 'DMY' | null = meta.slashOrder;
+    const dateCache = new Map<string | number, string | null>();
+    let pendingAmbiguousRows: { releaseCell: any; alignedCells: any[] }[] = [];
+
+    const alignRow = (row: any[]): any[] => {
+      const unified = new Array(masterColCount);
+      if (isIdentity) {
+        for (let m = 0; m < masterColCount; m++) {
+          const v = row[m];
+          unified[m] = v === undefined || v === null ? '' : v;
+        }
+      } else {
+        for (let m = 0; m < masterColCount; m++) {
+          const s = srcForMasterCol[m];
+          const v = s >= 0 && s < row.length ? row[s] : '';
+          unified[m] = v === undefined || v === null ? '' : v;
+        }
+      }
+      return unified;
+    };
+
+    const resolveDateCached = (cell: any, order: 'MDY' | 'DMY'): string | null => {
+      if (cell === undefined || cell === null || cell === '') return null;
+      if (typeof cell === 'string' || typeof cell === 'number') {
+        const cached = dateCache.get(cell);
+        if (cached !== undefined) return cached;
+        const parsed = parseCellToYmd(cell, order);
+        if (dateCache.size < 8192) {
+          dateCache.set(cell, parsed);
+        }
+        return parsed;
+      }
+      if (isExcelDateCellObj(cell)) {
+        const cached = dateCache.get(cell.v);
+        if (cached !== undefined) return cached;
+        const parsed = parseCellToYmd(cell, order);
+        if (dateCache.size < 8192) {
+          dateCache.set(cell.v, parsed);
+        }
+        return parsed;
+      }
+      return parseCellToYmd(cell, order);
+    };
+
+    const finalizeDateCheck = (alignedCells: any[], releaseCell: any, order: 'MDY' | 'DMY') => {
+      const rowYmd = resolveDateCached(releaseCell, order);
+      if (rowYmd) {
+        detectedDatesSet.add(rowYmd);
+      }
+
+      if (rowYmd !== null && rowYmd >= filterStartYmd && rowYmd <= filterEndYmd) {
+        if (typeof releaseCell === 'number' && releaseCell >= 20000 && releaseCell < 100000) {
+          alignedCells[releaseDateIdx] = {
+            t: 'n',
+            v: releaseCell,
+            z: 'yyyy-mm-dd',
+            w: rowYmd,
+          } as ExcelCellValue;
+        }
+        finalKeptRows.push(alignedCells);
+        fileFinalCounts[fIdx]++;
+      } else {
+        removedOutsideDateCount++;
+      }
+    };
+
+    const flushPendingAmbiguous = (order: 'MDY' | 'DMY') => {
+      if (pendingAmbiguousRows.length === 0) return;
+      dateCache.clear();
+      for (let i = 0; i < pendingAmbiguousRows.length; i++) {
+        const item = pendingAmbiguousRows[i];
+        finalizeDateCheck(item.alignedCells, item.releaseCell, order);
+      }
+      pendingAmbiguousRows = [];
+    };
+
+    let lastProgressReportRow = 0;
+    const basePct = 12 + Math.round((fIdx / validatedMetas.length) * 70);
+    const filePctSpan = Math.max(1, Math.round(70 / validatedMetas.length));
+
+    await streamSpreadsheetRows(
+      meta.file,
+      (row, rowIdx) => {
+        if (rowIdx <= meta.headerRowIndex) return;
+
+        // Skip repeated header rows inside body
+        if (rowIdx > meta.headerRowIndex && isRepeatedHeaderRow(row, meta.headersLower, masterHeadersLower)) {
+          return;
+        }
+
+        // Fast non-empty check
+        let hasData = false;
+        for (let c = 0; c < row.length; c++) {
+          const v = row[c];
+          if (v !== '' && v !== undefined && v !== null) {
+            if (typeof v !== 'string' || v.trim() !== '') {
+              hasData = true;
+              break;
+            }
+          }
+        }
+        if (!hasData) return;
+
+        totalRawRowCount++;
+        fileRawCounts[fIdx]++;
+
+        const rawReleaseCell =
+          srcReleaseDate >= 0 && srcReleaseDate < row.length ? row[srcReleaseDate] : '';
+
+        // Continuously watch for unambiguous slash date hints if still unknown
+        if (activeSlashOrder === null && rawReleaseCell !== '') {
+          const hint = inspectCellSlashOrder(rawReleaseCell);
+          if (hint) {
+            activeSlashOrder = hint;
+            flushPendingAmbiguous(hint);
+          }
+        }
+
+        // STEP 1: Filter USERSTATUS (Column Z) - remove blank & keep others
+        const rawUserStatus =
+          srcUserStatus >= 0 && srcUserStatus < row.length ? row[srcUserStatus] : '';
+        if (
+          rawUserStatus === '' ||
+          rawUserStatus === undefined ||
+          rawUserStatus === null ||
+          fastCellDisplay(rawUserStatus).trim() === ''
+        ) {
+          removedBlankUserStatusCount++;
+          return;
+        }
+
+        afterUserStatusCount++;
+        fileAfterStatusCounts[fIdx]++;
+
+        // STEP 2: Remove duplicates across Column A, B, C
+        const valA = srcColA >= 0 && srcColA < row.length ? fastCellDisplay(row[srcColA]).trim().toLowerCase() : '';
+        const valB = srcColB >= 0 && srcColB < row.length ? fastCellDisplay(row[srcColB]).trim().toLowerCase() : '';
+        const valC = srcColC >= 0 && srcColC < row.length ? fastCellDisplay(row[srcColC]).trim().toLowerCase() : '';
+        const compositeKey = `${valA}\x00${valB}\x00${valC}`;
+
+        if (seenABCKeys.has(compositeKey)) {
+          removedDuplicatesCount++;
+          return;
+        }
+        seenABCKeys.add(compositeKey);
+        afterDeduplicationCount++;
+
+        // STEP 3: Filter Releasedate (Column Y)
+        if (activeSlashOrder !== null) {
+          const rowYmd = resolveDateCached(rawReleaseCell, activeSlashOrder);
+          if (rowYmd) {
+            detectedDatesSet.add(rowYmd);
+          }
+
+          if (rowYmd !== null && rowYmd >= filterStartYmd && rowYmd <= filterEndYmd) {
+            const aligned = alignRow(row);
+            if (typeof rawReleaseCell === 'number' && rawReleaseCell >= 20000 && rawReleaseCell < 100000) {
+              aligned[releaseDateIdx] = {
+                t: 'n',
+                v: rawReleaseCell,
+                z: 'yyyy-mm-dd',
+                w: rowYmd,
+              } as ExcelCellValue;
+            }
+            finalKeptRows.push(aligned);
+            fileFinalCounts[fIdx]++;
+          } else {
+            removedOutsideDateCount++;
+          }
+        } else if (isAmbiguousSlashString(rawReleaseCell)) {
+          if (pendingAmbiguousRows.length < 40000) {
+            pendingAmbiguousRows.push({
+              alignedCells: alignRow(row),
+              releaseCell: rawReleaseCell,
+            });
+          } else {
+            // Bounded cap reached without disambiguation: lock to MDY & flush
+            activeSlashOrder = 'MDY';
+            flushPendingAmbiguous('MDY');
+            finalizeDateCheck(alignRow(row), rawReleaseCell, 'MDY');
+          }
+        } else {
+          // Date is unambiguous (serial, ISO YYYY-MM-DD, DD-MMM-YYYY, DD.MM.YYYY, etc.)
+          const rowYmd = resolveDateCached(rawReleaseCell, 'MDY');
+          if (rowYmd) {
+            detectedDatesSet.add(rowYmd);
+          }
+
+          if (rowYmd !== null && rowYmd >= filterStartYmd && rowYmd <= filterEndYmd) {
+            const aligned = alignRow(row);
+            if (typeof rawReleaseCell === 'number' && rawReleaseCell >= 20000 && rawReleaseCell < 100000) {
+              aligned[releaseDateIdx] = {
+                t: 'n',
+                v: rawReleaseCell,
+                z: 'yyyy-mm-dd',
+                w: rowYmd,
+              } as ExcelCellValue;
+            }
+            finalKeptRows.push(aligned);
+            fileFinalCounts[fIdx]++;
+          } else {
+            removedOutsideDateCount++;
+          }
+        }
+
+        if (totalRawRowCount - lastProgressReportRow >= 20000) {
+          lastProgressReportRow = totalRawRowCount;
+          if (onProgress) {
+            onProgress({
+              currentFile: fIdx + 1,
+              totalFiles: validatedMetas.length,
+              fileName: `Streaming ${meta.file.name} (${finalKeptRows.length.toLocaleString()} kept)...`,
+              totalRows: totalRawRowCount,
+              percent: Math.min(82, basePct + Math.round(filePctSpan * 0.5)),
+              stage: 'filtering',
+            });
+          }
+        }
+      },
+      {
+        signal,
+        onChunkProgress: (readBytes, totalBytes) => {
+          if (onProgress && totalBytes > 0) {
+            const frac = Math.min(1, readBytes / totalBytes);
+            onProgress({
+              currentFile: fIdx + 1,
+              totalFiles: validatedMetas.length,
+              fileName: `Processing ${meta.file.name}...`,
+              totalRows: totalRawRowCount,
+              percent: Math.min(82, basePct + Math.round(filePctSpan * frac)),
+              stage: 'filtering',
+            });
+          }
+        },
+      }
+    );
+
+    if (pendingAmbiguousRows.length > 0) {
+      flushPendingAmbiguous(activeSlashOrder || 'MDY');
+    }
 
     if (onProgress) {
       onProgress({
-        currentFile: pIdx + 1,
-        totalFiles: parsedFiles.length,
-        fileName: `Filtering USERSTATUS in ${file.name}`,
+        currentFile: fIdx + 1,
+        totalFiles: validatedMetas.length,
+        fileName: `Completed ${meta.file.name}`,
         totalRows: totalRawRowCount,
-        percent: Math.min(65, 45 + Math.round(((pIdx + 1) / parsedFiles.length) * 20)),
-        stage: 'filtering',
+        percent: Math.min(84, basePct + filePctSpan),
+        stage: 'deduplicating',
       });
     }
-
-    // Build non-colliding column index map from file's headers to masterHeaders
-    const colIndexMap: number[] = new Array(headers.length).fill(-1);
-    const usedMasterCols = new Set<number>();
-
-    // First pass: exact header match (preserving order for repeated header names)
-    headers.forEach((h, srcIdx) => {
-      const normH = h.trim().toLowerCase();
-      for (let mIdx = 0; mIdx < masterHeaders.length; mIdx++) {
-        if (!usedMasterCols.has(mIdx) && masterHeaders[mIdx].trim().toLowerCase() === normH) {
-          colIndexMap[srcIdx] = mIdx;
-          usedMasterCols.add(mIdx);
-          break;
-        }
-      }
-    });
-
-    // Second pass: positional fallback for any unmatched columns
-    headers.forEach((_h, srcIdx) => {
-      if (colIndexMap[srcIdx] === -1 && srcIdx < masterHeaders.length && !usedMasterCols.has(srcIdx)) {
-        colIndexMap[srcIdx] = srcIdx;
-        usedMasterCols.add(srcIdx);
-      }
-    });
-
-    for (let r = 1; r < rows.length; r++) {
-      const row = rows[r];
-      if (!row || row.length === 0) continue;
-
-      // Skip repeated duplicate header rows
-      const isRepeatedHeader = row.every((val, colIdx) => {
-        const strVal = formatCellDisplay(val).trim();
-        if (!strVal) return true;
-        const selfMatch = headers[colIdx] && strVal.toLowerCase() === headers[colIdx].toLowerCase();
-        const masterMatch = masterHeaders[colIdx] && strVal.toLowerCase() === masterHeaders[colIdx].toLowerCase();
-        return selfMatch || masterMatch;
-      });
-      if (isRepeatedHeader) continue;
-
-      // Skip pure empty rows
-      const hasData = row.some((c) => c !== undefined && c !== null && formatCellDisplay(c).trim() !== '');
-      if (!hasData) continue;
-
-      const unifiedRow = new Array(masterHeaders.length).fill('');
-      for (let srcColIdx = 0; srcColIdx < row.length; srcColIdx++) {
-        const targetColIdx = colIndexMap[srcColIdx];
-        if (targetColIdx !== undefined && targetColIdx >= 0 && targetColIdx < masterHeaders.length) {
-          unifiedRow[targetColIdx] = row[srcColIdx];
-        }
-      }
-
-      totalRawRowCount++;
-      fileRawCounts[pIdx]++;
-
-      // STEP 1: Filter USERSTATUS (Column Z) - remove blank & keep others
-      const userStatusVal = formatCellDisplay(unifiedRow[userStatusIdx]).trim();
-      if (!userStatusVal) {
-        removedBlankUserStatusCount++;
-        continue;
-      }
-
-      fileAfterStatusCounts[pIdx]++;
-      afterUserStatusRows.push({
-        fileIdx: pIdx,
-        cells: unifiedRow,
-      });
-
-      if (r % 15000 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-    }
+    await yieldToUi();
   }
 
-  // Phase 4: STEP 2 - Remove duplicates from Column A, B, C
-  if (onProgress) {
-    onProgress({
-      currentFile: parsedFiles.length,
-      totalFiles: parsedFiles.length,
-      fileName: 'Removing duplicates across Columns A, B, C...',
-      totalRows: afterUserStatusRows.length,
-      percent: 75,
-      stage: 'deduplicating',
-    });
-  }
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const seenABCKeys = new Set<string>();
-  const afterDedupeRows: TaggedRow[] = [];
-  let removedDuplicatesCount = 0;
-
-  for (let i = 0; i < afterUserStatusRows.length; i++) {
-    if (signal?.aborted) {
-      throw new Error('Consolidation was cancelled by the user.');
-    }
-
-    const item = afterUserStatusRows[i];
-    const colA = formatCellDisplay(item.cells[0]).trim().toLowerCase();
-    const colB = formatCellDisplay(item.cells[1]).trim().toLowerCase();
-    const colC = formatCellDisplay(item.cells[2]).trim().toLowerCase();
-
-    const compositeKey = `${colA}__##__${colB}__##__${colC}`;
-
-    if (seenABCKeys.has(compositeKey)) {
-      removedDuplicatesCount++;
-      continue;
-    }
-
-    seenABCKeys.add(compositeKey);
-    afterDedupeRows.push(item);
-  }
-
-  // Phase 5: STEP 3 - Filter Releasedate (Column Y) against selected date / range
-  if (onProgress) {
-    onProgress({
-      currentFile: parsedFiles.length,
-      totalFiles: parsedFiles.length,
-      fileName: `Filtering Releasedate (${dateFilterDescription})...`,
-      totalRows: afterDedupeRows.length,
-      percent: 84,
-      stage: 'filtering',
-    });
-  }
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  // Infer slash date order (DMY vs MDY) across all Releasedate cells
-  const releaseDateSamples = afterDedupeRows.slice(0, 500).map((item) => item.cells[releaseDateIdx]);
-  const slashOrder = inferSlashDateOrder(releaseDateSamples);
-
-  const detectedDatesSet = new Set<string>();
-  const finalKeptRows: any[][] = [];
-  let removedOutsideDateCount = 0;
-
-  for (let i = 0; i < afterDedupeRows.length; i++) {
-    const item = afterDedupeRows[i];
-    const cellVal = item.cells[releaseDateIdx];
-    const rowYmd = parseCellToYmd(cellVal, slashOrder);
-
-    if (rowYmd) {
-      detectedDatesSet.add(rowYmd);
-    }
-
-    if (rowYmd !== null && rowYmd >= filterStartYmd && rowYmd <= filterEndYmd) {
-      // Ensure numeric date cells in Releasedate column preserve readable Excel formatting
-      const normalizedCells = [...item.cells];
-      const relCell = normalizedCells[releaseDateIdx];
-      if (typeof relCell === 'number' && relCell >= 20000 && relCell < 100000) {
-        normalizedCells[releaseDateIdx] = {
-          t: 'n',
-          v: relCell,
-          z: 'yyyy-mm-dd',
-          w: rowYmd,
-        } as ExcelCellValue;
-      }
-      finalKeptRows.push(normalizedCells);
-      fileFinalCounts[item.fileIdx]++;
-    } else {
-      removedOutsideDateCount++;
-    }
-  }
+  // Release seenABCKeys immediately to free memory before output generation
+  seenABCKeys.clear();
 
   const detectedDates = Array.from(detectedDatesSet).sort();
 
   if (finalKeptRows.length === 0) {
     warnings.push(
       detectedDates.length > 0
-        ? `No rows matched ${dateFilterDescription}. Dates present in Releasedate (${releaseDateColumnName}): ${detectedDates.join(', ')}.`
+        ? `No rows matched ${dateFilterDescription}. Dates present in Releasedate (${releaseDateColumnName}): ${detectedDates.slice(0, 12).join(', ')}${detectedDates.length > 12 ? ` (+${detectedDates.length - 12} more)` : ''}.`
         : `No rows matched ${dateFilterDescription} (no valid dates found in ${releaseDateColumnName} after filtering).`
     );
   }
 
-  const fileContributions: FileContribution[] = parsedFiles.map((pf, idx) => ({
-    fileName: pf.file.name,
+  const fileContributions: FileContribution[] = validatedMetas.map((meta, idx) => ({
+    fileName: meta.file.name,
     rawRowCount: fileRawCounts[idx],
     afterUserStatusCount: fileAfterStatusCounts[idx],
     rowCount: fileFinalCounts[idx],
-    columnCount: pf.headers.length,
-    fileSize: pf.file.size,
+    columnCount: meta.headers.length,
+    fileSize: meta.file.size,
   }));
 
-  // Phase 6: Generate consolidated Excel & CSV outputs
+  // Phase 4: Generate consolidated CSV & XLSX outputs rapidly
   if (onProgress) {
     onProgress({
-      currentFile: parsedFiles.length,
-      totalFiles: parsedFiles.length,
-      fileName: 'Generating Excel workbook...',
+      currentFile: validatedMetas.length,
+      totalFiles: validatedMetas.length,
+      fileName: `Generating Excel & CSV (${finalKeptRows.length.toLocaleString()} kept rows)...`,
       totalRows: finalKeptRows.length,
-      percent: 92,
+      percent: 88,
       stage: 'generating',
     });
   }
-  await new Promise((resolve) => setTimeout(resolve, 15));
+  await yieldToUi();
 
-  const consolidatedAoA: any[][] = [masterHeaders, ...finalKeptRows];
-
-  // Build CSV chunks cleanly using display strings
+  // CSV chunk builder
   const csvChunks: string[] = [];
   let currentCsvLines: string[] = [masterHeaders.map(escapeCsvCell).join(',')];
   for (let i = 0; i < finalKeptRows.length; i++) {
     currentCsvLines.push(finalKeptRows[i].map(escapeCsvCell).join(','));
-    if (currentCsvLines.length >= 2500) {
+    if (currentCsvLines.length >= 4000) {
       csvChunks.push(currentCsvLines.join('\r\n') + '\r\n');
       currentCsvLines = [];
+      if (i % 40000 === 0) {
+        await yieldToUi();
+      }
     }
   }
   if (currentCsvLines.length > 0) {
@@ -897,27 +975,22 @@ export const consolidateFiles = async (
   }
   const csvBlob = new Blob(csvChunks, { type: 'text/csv;charset=utf-8;' });
 
-  const workbook = XLSX.utils.book_new();
-
-  // Sheet 1: Consolidated Data
-  const ws1 = XLSX.utils.aoa_to_sheet(consolidatedAoA);
+  // Column width calculation from header + first 100 kept rows
   const colWidths = masterHeaders.map((h, colIdx) => {
     let maxLen = Math.max(10, String(h).length);
-    const sampleLimit = Math.min(consolidatedAoA.length, 100);
-    for (let r = 1; r < sampleLimit; r++) {
-      const display = formatCellDisplay(consolidatedAoA[r]?.[colIdx]);
+    const sampleLimit = Math.min(finalKeptRows.length, 100);
+    for (let r = 0; r < sampleLimit; r++) {
+      const display = fastCellDisplay(finalKeptRows[r]?.[colIdx]);
       if (display) {
         maxLen = Math.max(maxLen, Math.min(50, display.length));
       }
     }
-    return { wch: maxLen + 2 };
+    return maxLen + 2;
   });
-  ws1['!cols'] = colWidths;
-  XLSX.utils.book_append_sheet(workbook, ws1, 'Consolidated Data');
 
-  // Sheet 2: Consolidation Summary
+  // Summary Sheet Rows
   const summaryHeaders = ['#', 'File Name', 'Raw Data Rows', 'Non-Blank USERSTATUS', 'Final Kept Rows', 'File Size (KB)'];
-  const summaryRows = fileContributions.map((fc, idx) => [
+  const summaryFileRows = fileContributions.map((fc, idx) => [
     idx + 1,
     fc.fileName,
     fc.rawRowCount,
@@ -932,34 +1005,55 @@ export const consolidateFiles = async (
     ['Master Header Source', primaryHeaderSourceFileName],
     ['Total Raw Data Rows Read', totalRawRowCount],
     [`Step 1: Removed Blank ${userStatusColumnName} (Col Z)`, removedBlankUserStatusCount],
-    [`Step 1: Rows After ${userStatusColumnName} Filter`, afterUserStatusRows.length],
+    [`Step 1: Rows After ${userStatusColumnName} Filter`, afterUserStatusCount],
     ['Step 2: Removed Duplicates (Columns A, B, C)', removedDuplicatesCount],
-    ['Step 2: Rows After Deduplication', afterDedupeRows.length],
+    ['Step 2: Rows After Deduplication', afterDeduplicationCount],
     [`Step 3: Filter Rule (${releaseDateColumnName} Col Y)`, dateFilterDescription],
     ['Step 3: Removed Outside Date Filter', removedOutsideDateCount],
     ['Final Consolidated Rows Output', finalKeptRows.length],
     ['Consolidation Timestamp', new Date().toLocaleString()],
     ['', ''],
     ['FILE BREAKDOWN', ''],
-  ];
-
-  const ws2Data = [...overviewRows, summaryHeaders, ...summaryRows];
-  const ws2 = XLSX.utils.aoa_to_sheet(ws2Data);
-  ws2['!cols'] = [{ wch: 42 }, { wch: 36 }, { wch: 16 }, { wch: 22 }, { wch: 18 }, { wch: 16 }];
-  XLSX.utils.book_append_sheet(workbook, ws2, 'Consolidation Summary');
-
-  const outBytes = safeWriteXlsx(workbook);
-
-  // Format preview rows as display strings (first 25 data rows)
-  const previewRows: any[][] = [
-    masterHeaders,
-    ...finalKeptRows.slice(0, 25).map((row) => row.map(formatCellDisplay)),
+    summaryHeaders,
+    ...summaryFileRows,
   ];
 
   if (onProgress) {
     onProgress({
-      currentFile: parsedFiles.length,
-      totalFiles: parsedFiles.length,
+      currentFile: validatedMetas.length,
+      totalFiles: validatedMetas.length,
+      fileName: 'Compressing Excel (.xlsx) workbook...',
+      totalRows: finalKeptRows.length,
+      percent: 94,
+      stage: 'generating',
+    });
+  }
+
+  const excelBlob = await buildFastXlsxBlob(
+    {
+      name: 'Consolidated Data',
+      headers: masterHeaders,
+      rows: finalKeptRows,
+      colWidths,
+    },
+    {
+      name: 'Consolidation Summary',
+      rows: overviewRows,
+      colWidths: [42, 36, 16, 22, 18, 16],
+    },
+    signal
+  );
+
+  // Format preview rows as display strings (first 25 data rows)
+  const previewRows: any[][] = [
+    masterHeaders,
+    ...finalKeptRows.slice(0, 25).map((row) => row.map(fastCellDisplay)),
+  ];
+
+  if (onProgress) {
+    onProgress({
+      currentFile: validatedMetas.length,
+      totalFiles: validatedMetas.length,
       fileName: 'Consolidation Complete',
       totalRows: finalKeptRows.length,
       percent: 100,
@@ -968,13 +1062,13 @@ export const consolidateFiles = async (
   }
 
   return {
-    data: outBytes,
+    excelBlob,
     csvBlob,
     fileCount: fileContributions.length,
     rawRowCount: totalRawRowCount,
-    afterUserStatusCount: afterUserStatusRows.length,
+    afterUserStatusCount,
     removedBlankUserStatusCount,
-    afterDeduplicationCount: afterDedupeRows.length,
+    afterDeduplicationCount,
     removedDuplicatesCount,
     rowCount: finalKeptRows.length,
     removedOutsideDateCount,

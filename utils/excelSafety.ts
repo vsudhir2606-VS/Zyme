@@ -8,14 +8,14 @@ import * as XLSX from 'xlsx';
 export const clampWorksheetRange = (
   ws: XLSX.WorkSheet | undefined,
   maxCols = 200,
-  maxRows = 150000
+  maxRows = 1048576
 ): void => {
   if (!ws || !ws['!ref']) return;
   try {
     const range = XLSX.utils.decode_range(ws['!ref']);
-    
-    // If range is already modest (< 20,000 rows and < 80 cols), skip scanning for speed
-    if (range.e.r < 20000 && range.e.c < 80) {
+
+    // If range is already within reasonable non-bloated limits, skip expensive Object.keys scan
+    if (range.e.r < 1048575 && range.e.c <= maxCols) {
       return;
     }
 
