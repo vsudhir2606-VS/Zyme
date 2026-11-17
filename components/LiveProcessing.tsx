@@ -37,10 +37,20 @@ import {
   Layers,
   Eye,
   UserCheck,
-  Globe
+  Globe,
+  Loader2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
+import {
+  buildFastXlsxBlob,
+  triggerBlobDownload,
+  streamSpreadsheetRows,
+  getXlsxSheetNames,
+  sniffFileFormat,
+  yieldToUi,
+  StreamedDateCell,
+} from '../utils/fastSpreadsheetStream.ts';
 import { 
   saveSplCcComment, 
   getSavedSplCcComments, 
@@ -795,6 +805,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const [selectedSheet, setSelectedSheet] = useState<string>('');
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<'excel' | 'csv' | null>(null);
+  const [downloadProgressText, setDownloadProgressText] = useState<string>('');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // Raw file structure
   const [rawHeaders, setRawHeaders] = useState<string[]>([]);
@@ -807,6 +820,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   // Collapsible sidebar state (collapsed by default)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [sidebarRenderLimit, setSidebarRenderLimit] = useState<number>(300);
 
   // Review preferences & filter
   const [autoAdvance, setAutoAdvance] = useState(true);
@@ -1036,43 +1050,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   }, [initialProcessedRows]);
 
-  // Handle file selection
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files[0]) return;
-    const selected = e.target.files[0];
-    setFile(selected);
-    setError(null);
-    setParsing(true);
-
-    try {
-      const arrayBuffer = await selected.arrayBuffer();
-      const wb = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
-      setAvailableSheets(wb.SheetNames);
-      
-      const targetSheet = wb.SheetNames.find(s => s.toLowerCase().includes('sheet 2') || s.toLowerCase().includes('sheet2'))
-        || wb.SheetNames[0]
-        || '';
-      setSelectedSheet(targetSheet);
-
-      loadSheetData(wb, targetSheet);
-    } catch (err: any) {
-      console.error('Failed to parse file:', err);
-      setError(err?.message || 'Failed to parse the selected file.');
-    } finally {
-      setParsing(false);
-    }
-  };
-
-  const loadSheetData = (wb: XLSX.WorkBook, sheetName: string) => {
-    const ws = wb.Sheets[sheetName];
-    if (!ws) {
-      throw new Error(`Sheet "${sheetName}" not found.`);
-    }
-    clampWorksheetRange(ws);
-
-    const rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
+  const extractHeadersAndData = async (rows: any[][], sheetLabel: string) => {
     if (!rows || rows.length === 0) {
-      throw new Error(`Sheet "${sheetName}" is empty.`);
+      throw new Error(`Sheet "${sheetLabel}" is empty.`);
     }
 
     let headerRowIdx = 0;
@@ -1089,11 +1069,96 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
 
     const headers = (rows[headerRowIdx] || []).map((h, i) => String(h || `Column ${i + 1}`).trim());
-    const dataRows = rows.slice(headerRowIdx + 1).filter(r => r && r.some(cell => String(cell || '').trim() !== ''));
+    const dataRows: any[][] = [];
+    for (let i = headerRowIdx + 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r && r.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '')) {
+        dataRows.push(r);
+      }
+      if (i % 15000 === 0) {
+        await yieldToUi();
+      }
+    }
 
     setRawHeaders(headers);
     setRawDataRows(dataRows);
     buildCasesFromRows(headers, dataRows);
+  };
+
+  // Handle file selection (streaming XLSX/CSV so huge 5,000+ case workbooks load smoothly)
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    const selected = e.target.files[0];
+    setFile(selected);
+    setError(null);
+    setDownloadError(null);
+    setParsing(true);
+
+    try {
+      await yieldToUi();
+      const format = await sniffFileFormat(selected);
+      let rows: any[][] = [];
+      let targetSheet = 'Sheet1';
+
+      if (format === 'xlsx') {
+        const sheetNames = await getXlsxSheetNames(selected);
+        setAvailableSheets(sheetNames);
+        targetSheet =
+          sheetNames.find(s => s.toLowerCase().includes('sheet 2') || s.toLowerCase().includes('sheet2')) ||
+          sheetNames[0] ||
+          'Sheet1';
+        setSelectedSheet(targetSheet);
+
+        await streamSpreadsheetRows(
+          selected,
+          (row) => {
+            rows.push(row);
+          },
+          { maxCols: 200, sheetName: targetSheet }
+        );
+      } else if (format === 'csv') {
+        setAvailableSheets(['CSV']);
+        setSelectedSheet('CSV');
+        targetSheet = 'CSV';
+
+        await streamSpreadsheetRows(
+          selected,
+          (row) => {
+            rows.push(row);
+          },
+          { maxCols: 200 }
+        );
+      } else {
+        const arrayBuffer = await selected.arrayBuffer();
+        const wb = XLSX.read(arrayBuffer, {
+          type: 'array',
+          cellDates: true,
+          cellHTML: false,
+          cellFormula: false,
+        });
+        setAvailableSheets(wb.SheetNames);
+
+        targetSheet =
+          wb.SheetNames.find(s => s.toLowerCase().includes('sheet 2') || s.toLowerCase().includes('sheet2')) ||
+          wb.SheetNames[0] ||
+          '';
+        setSelectedSheet(targetSheet);
+
+        const ws = wb.Sheets[targetSheet];
+        if (!ws) {
+          throw new Error(`Sheet "${targetSheet}" not found.`);
+        }
+        clampWorksheetRange(ws, 200, 1048576);
+        rows = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: '' });
+      }
+
+      await extractHeadersAndData(rows, targetSheet);
+    } catch (err: any) {
+      console.error('Failed to parse file:', err);
+      setError(err?.message || 'Failed to parse the selected file.');
+    } finally {
+      setParsing(false);
+    }
   };
 
   const findCol = (headers: string[], names: string[], excludes: string[] = []): number => {
@@ -1467,6 +1532,40 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   }, [cases, activeCaseId, sortedCases]);
 
+  // Reset sidebar window when filter/search/sort changes
+  useEffect(() => {
+    setSidebarRenderLimit(300);
+  }, [filterMode, searchQuery, sortOption]);
+
+  // Precompute alert flags once per cases load so 5,000-case sidebar renders stay instant
+  const caseAlertMeta = useMemo(() => {
+    const map = new Map<string, {
+      isRed: boolean;
+      redLabel: string;
+      isOrange: boolean;
+      orangeLabel: string;
+      isBlueNoAdd: boolean;
+    }>();
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      const isRed = isRedNameMatch(c.customerName, c.status);
+      const isOrange = !isRed && isOrangeNameMatch(c.customerName, c.status);
+      const isBlueNoAdd = !isRed && !isOrange && isNoAddMatch(c.customerName, c.status, c.isNoAdd);
+      map.set(c.caseId, {
+        isRed,
+        redLabel: isRed ? getRedMatchedKeyword(c.customerName, c.status) : '',
+        isOrange,
+        orangeLabel: isOrange ? getOrangeMatchedKeyword(c.customerName, c.status) : '',
+        isBlueNoAdd,
+      });
+    }
+    return map;
+  }, [cases]);
+
+  const visibleSidebarCases = useMemo(() => {
+    return filteredCases.slice(0, sidebarRenderLimit);
+  }, [filteredCases, sidebarRenderLimit]);
+
   // Statistics
   const stats = useMemo(() => {
     const total = cases.length;
@@ -1791,23 +1890,22 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setAutoSaveStatus('idle');
   }, [activeCase?.caseId, activeCase?.notes]);
 
-  // Download reviewed Excel
-  const handleDownloadReviewedExcel = () => {
-    if (cases.length === 0 || rawHeaders.length === 0) return;
-
+  const buildReviewedExportData = async () => {
     const rowActionMap = new Map<number, string>();
     const rowNoteMap = new Map<number, string>();
 
-    cases.forEach(c => {
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
       const actionText = c.action || '';
       const noteText = c.notes || '';
-      c.rplEntries.forEach(rpl => {
+      for (let j = 0; j < c.rplEntries.length; j++) {
+        const rpl = c.rplEntries[j];
         rowActionMap.set(rpl.rowIndex, actionText || noteText);
         if (noteText) {
           rowNoteMap.set(rpl.rowIndex, noteText);
         }
-      });
-    });
+      }
+    }
 
     const actionColIdx = rawHeaders.findIndex(h => h.toLowerCase().trim() === 'action');
     const notesColIdx = rawHeaders.findIndex(h => {
@@ -1815,41 +1913,39 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       return s === 'review notes' || s === 'notes' || s === 'comment' || s === 'comments' || s === 'remarks' || s === 'remark';
     });
 
-    let outputHeaders: string[];
-    if (actionColIdx >= 0) {
-      outputHeaders = [...rawHeaders];
-    } else {
-      outputHeaders = ['Action', ...rawHeaders];
-    }
-
+    const outputHeaders = actionColIdx >= 0 ? [...rawHeaders] : ['Action', ...rawHeaders];
     if (notesColIdx < 0) {
       outputHeaders.push('Comments');
     }
 
-    const reviewedRows: any[][] = [outputHeaders];
+    const headerLen = rawHeaders.length;
+    const dataRows: any[][] = new Array(rawDataRows.length);
 
-    rawDataRows.forEach((row, rIdx) => {
+    for (let rIdx = 0; rIdx < rawDataRows.length; rIdx++) {
+      const row = rawDataRows[rIdx] || [];
       const actionVal = rowActionMap.get(rIdx) || '';
       const noteVal = rowNoteMap.get(rIdx) || '';
       const newRow: any[] = [];
 
       if (actionColIdx >= 0) {
-        for (let cI = 0; cI < row.length; cI++) {
+        for (let cI = 0; cI < headerLen; cI++) {
+          const rawCell = cI < row.length ? row[cI] : '';
           if (cI === actionColIdx) {
             newRow.push(actionVal);
           } else if (notesColIdx >= 0 && cI === notesColIdx) {
-            newRow.push(noteVal || row[cI]);
+            newRow.push(noteVal || rawCell);
           } else {
-            newRow.push(row[cI]);
+            newRow.push(rawCell);
           }
         }
       } else {
         newRow.push(actionVal);
-        for (let cI = 0; cI < row.length; cI++) {
+        for (let cI = 0; cI < headerLen; cI++) {
+          const rawCell = cI < row.length ? row[cI] : '';
           if (notesColIdx >= 0 && cI === notesColIdx) {
-            newRow.push(noteVal || row[cI]);
+            newRow.push(noteVal || rawCell);
           } else {
-            newRow.push(row[cI]);
+            newRow.push(rawCell);
           }
         }
       }
@@ -1858,41 +1954,128 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         newRow.push(noteVal);
       }
 
-      reviewedRows.push(newRow);
-    });
+      dataRows[rIdx] = newRow;
 
-    const outWb = XLSX.utils.book_new();
-    const outWs = XLSX.utils.aoa_to_sheet(reviewedRows);
+      if (rIdx > 0 && rIdx % 5000 === 0) {
+        await yieldToUi();
+      }
+    }
 
     const colWidths = outputHeaders.map((hdr, colI) => {
       let maxLen = hdr.length;
-      const sample = Math.min(reviewedRows.length, 100);
-      for (let r = 1; r < sample; r++) {
-        const val = reviewedRows[r]?.[colI];
+      const sample = Math.min(dataRows.length, 100);
+      for (let r = 0; r < sample; r++) {
+        const val = dataRows[r]?.[colI];
         if (val !== null && val !== undefined) {
           const l = String(val).length;
           if (l > maxLen) maxLen = l;
         }
       }
-      return { wch: Math.min(Math.max(maxLen + 3, 12), 45) };
+      return Math.min(Math.max(maxLen + 3, 12), 45);
     });
-    outWs['!cols'] = colWidths;
 
-    XLSX.utils.book_append_sheet(outWb, outWs, 'Live_Reviewed');
-
-    const excelBuf = XLSX.write(outWb, { bookType: 'xlsx', type: 'array' });
-    const blob = new Blob([new Uint8Array(excelBuf)], { 
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
-    });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const baseName = file?.name?.replace(/\.[^/.]+$/, '') || initialFileName?.replace(/\.[^/.]+$/, '') || 'Zyme_E4H';
-    a.download = `${baseName}_Reviewed_Live.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
+    return { outputHeaders, dataRows, colWidths, baseName };
+  };
+
+  // Download reviewed Excel (streaming deflated XLSX + delayed Blob URL revocation for 5,000+ cases)
+  const handleDownloadReviewedExcel = async () => {
+    if (downloading || cases.length === 0 || rawHeaders.length === 0) return;
+
+    setDownloading('excel');
+    setDownloadError(null);
+    setDownloadProgressText('Preparing rows...');
+    try {
+      await yieldToUi();
+      const { outputHeaders, dataRows, colWidths, baseName } = await buildReviewedExportData();
+      setDownloadProgressText(`Building Excel (${dataRows.length.toLocaleString()} rows)...`);
+      await yieldToUi();
+
+      const blob = await buildFastXlsxBlob({
+        name: 'Live_Reviewed',
+        headers: outputHeaders,
+        rows: dataRows,
+        colWidths,
+      });
+
+      triggerBlobDownload(blob, `${baseName}_Reviewed_Live.xlsx`);
+    } catch (err: any) {
+      console.error('Excel export failed:', err);
+      setDownloadError(err?.message || 'Failed to build Excel download. You can also try Download CSV.');
+    } finally {
+      setDownloading(null);
+      setDownloadProgressText('');
+    }
+  };
+
+  const formatCellForCsv = (val: any): string => {
+    if (val === undefined || val === null) return '';
+    let str = '';
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      const y = val.getFullYear();
+      const m = String(val.getMonth() + 1).padStart(2, '0');
+      const d = String(val.getDate()).padStart(2, '0');
+      str = `${y}-${m}-${d}`;
+    } else if (typeof val === 'object') {
+      const dc = val as StreamedDateCell;
+      if (dc.t === 'n' && typeof dc.v === 'number' && Number.isFinite(dc.v)) {
+        const ms = Date.UTC(1899, 11, 30) + Math.round(dc.v) * 86400000;
+        const dt = new Date(ms);
+        const y = dt.getUTCFullYear();
+        const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+        const d = String(dt.getUTCDate()).padStart(2, '0');
+        str = `${y}-${m}-${d}`;
+      } else {
+        str = String((val as any).w ?? (val as any).v ?? '');
+      }
+    } else {
+      str = String(val);
+    }
+    if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  // Download reviewed CSV (ultra-fast fallback for massive 5,000+ case exports)
+  const handleDownloadReviewedCsv = async () => {
+    if (downloading || cases.length === 0 || rawHeaders.length === 0) return;
+
+    setDownloading('csv');
+    setDownloadError(null);
+    setDownloadProgressText('Building CSV...');
+    try {
+      await yieldToUi();
+      const { outputHeaders, dataRows, baseName } = await buildReviewedExportData();
+
+      const csvParts: string[] = ['\uFEFF'];
+      csvParts.push(outputHeaders.map(formatCellForCsv).join(',') + '\r\n');
+
+      let lineBuf: string[] = [];
+      for (let i = 0; i < dataRows.length; i++) {
+        const row = dataRows[i];
+        lineBuf.push(row.map(formatCellForCsv).join(','));
+        if (lineBuf.length >= 2000) {
+          csvParts.push(lineBuf.join('\r\n') + '\r\n');
+          lineBuf = [];
+          if (i % 6000 === 0) {
+            await yieldToUi();
+          }
+        }
+      }
+      if (lineBuf.length > 0) {
+        csvParts.push(lineBuf.join('\r\n') + '\r\n');
+      }
+
+      const blob = new Blob(csvParts, { type: 'text/csv;charset=utf-8;' });
+      triggerBlobDownload(blob, `${baseName}_Reviewed_Live.csv`);
+    } catch (err: any) {
+      console.error('CSV export failed:', err);
+      setDownloadError(err?.message || 'Failed to build CSV download.');
+    } finally {
+      setDownloading(null);
+      setDownloadProgressText('');
+    }
   };
 
   const handleReset = () => {
@@ -1903,6 +2086,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setActiveCaseId(null);
     setSortOption('original');
     setError(null);
+    setDownloadError(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -1941,27 +2125,31 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 </div>
 
                 <div
-                  onClick={() => fileInputRef.current?.click()}
-                  className="group relative border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-2xl p-9 cursor-pointer transition-all duration-200 bg-slate-50/50 hover:bg-indigo-50/20"
+                  onClick={() => !parsing && fileInputRef.current?.click()}
+                  className={`group relative border-2 border-dashed rounded-2xl p-9 transition-all duration-200 ${
+                    parsing
+                      ? 'border-indigo-400 bg-indigo-50/40 cursor-wait'
+                      : 'border-slate-300 hover:border-indigo-500 cursor-pointer bg-slate-50/50 hover:bg-indigo-50/20'
+                  }`}
                 >
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".xlsx,.xls,.csv"
+                    accept=".xlsx,.xls,.xlsm,.csv,.tsv"
                     onChange={handleFileChange}
                     className="hidden"
                   />
 
                   <div className="flex flex-col items-center justify-center gap-3">
                     <div className="w-11 h-11 rounded-xl bg-white border border-slate-200 flex items-center justify-center text-slate-600 group-hover:text-indigo-600 group-hover:border-indigo-200 group-hover:shadow-2xs transition-all">
-                      <Upload size={20} />
+                      {parsing ? <Loader2 size={20} className="animate-spin text-indigo-600" /> : <Upload size={20} />}
                     </div>
                     <div>
                       <p className="text-sm font-semibold text-slate-800 group-hover:text-indigo-600 transition-colors">
-                        Click to upload Zyme E4H file
+                        {parsing ? 'Streaming & parsing cases...' : 'Click to upload Zyme E4H file'}
                       </p>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Supports Excel (.xlsx, .xls) and CSV
+                        {parsing ? 'Handling large workbooks safely in batches' : 'Supports Excel (.xlsx, .xls, .xlsm) and CSV'}
                       </p>
                     </div>
                   </div>
@@ -2110,11 +2298,41 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   {/* Download Reviewed Excel */}
                   <button
                     onClick={handleDownloadReviewedExcel}
-                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-2xs transition-colors"
+                    disabled={downloading !== null}
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-500 disabled:cursor-wait text-white text-xs font-bold rounded-lg shadow-2xs transition-colors cursor-pointer"
                     title="Download audited Excel (.xlsx) file"
                   >
-                    <Download size={14} />
-                    <span>Download Excel</span>
+                    {downloading === 'excel' ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        <span>{downloadProgressText || 'Exporting...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download size={14} />
+                        <span>Download Excel</span>
+                      </>
+                    )}
+                  </button>
+
+                  {/* Download Reviewed CSV */}
+                  <button
+                    onClick={handleDownloadReviewedCsv}
+                    disabled={downloading !== null}
+                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 disabled:opacity-60 disabled:cursor-wait text-slate-700 border border-slate-300 text-xs font-bold rounded-lg shadow-2xs transition-colors cursor-pointer"
+                    title="Download audited CSV file (instant for huge files)"
+                  >
+                    {downloading === 'csv' ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin text-indigo-600" />
+                        <span>CSV...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={13} className="text-slate-600" />
+                        <span>CSV</span>
+                      </>
+                    )}
                   </button>
 
                   <button
@@ -2137,6 +2355,23 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 </div>
 
               </div>
+
+              {downloadError && (
+                <div className="px-5 py-2 bg-rose-50 border-b border-rose-200 text-xs text-rose-700 flex items-center justify-between gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle size={14} className="text-rose-600 flex-shrink-0" />
+                    <span>{downloadError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDownloadError(null)}
+                    className="p-0.5 text-rose-500 hover:text-rose-800 cursor-pointer"
+                    title="Dismiss"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
 
               {/* DUAL WORKSPACE: COLLAPSIBLE LEFT DRAWER + MAIN SCREEN */}
               <div className="flex flex-1 min-h-0 relative overflow-hidden">
@@ -2254,98 +2489,112 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           No items match your filter.
                         </div>
                       ) : (
-                        filteredCases.map((c) => {
-                          const isSelected = c.caseId === activeCase?.caseId;
-                          const isRedItem = isRedNameMatch(c.customerName, c.status);
-                          const isOrangeItem = !isRedItem && isOrangeNameMatch(c.customerName, c.status);
-                          const isBlueNoAddItem = !isRedItem && !isOrangeItem && isNoAddMatch(c.customerName, c.status, c.isNoAdd);
+                        <>
+                          {visibleSidebarCases.map((c) => {
+                            const isSelected = c.caseId === activeCase?.caseId;
+                            const meta = caseAlertMeta.get(c.caseId);
+                            const isRedItem = meta?.isRed ?? false;
+                            const isOrangeItem = meta?.isOrange ?? false;
+                            const isBlueNoAddItem = meta?.isBlueNoAdd ?? false;
 
-                          return (
-                            <div
-                              key={c.caseId}
-                              onClick={() => setActiveCaseId(c.caseId)}
-                              className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
-                            >
-                              <div className="flex items-center justify-between gap-1 mb-0.5">
-                                <span className={`font-mono text-[11px] font-bold px-1.5 py-0.2 rounded tabular-nums ${
+                            return (
+                              <div
+                                key={c.caseId}
+                                onClick={() => setActiveCaseId(c.caseId)}
+                                className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
+                              >
+                                <div className="flex items-center justify-between gap-1 mb-0.5">
+                                  <span className={`font-mono text-[11px] font-bold px-1.5 py-0.2 rounded tabular-nums ${
+                                    isRedItem
+                                      ? 'text-red-700 bg-red-100'
+                                      : isOrangeItem
+                                      ? 'text-orange-800 bg-orange-100'
+                                      : isBlueNoAddItem
+                                      ? 'text-blue-700 bg-blue-100'
+                                      : 'text-indigo-700 bg-indigo-100/60'
+                                  }`}>
+                                    #{c.posnr}
+                                  </span>
+
+                                  <div className="flex items-center gap-1">
+                                    {isRedItem && (
+                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
+                                        {meta?.redLabel}
+                                      </span>
+                                    )}
+                                    {isOrangeItem && (
+                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
+                                        {meta?.orangeLabel}
+                                      </span>
+                                    )}
+                                    {isBlueNoAddItem && (
+                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-blue-600 text-white">
+                                        NO add
+                                      </span>
+                                    )}
+                                    {c.action ? (
+                                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                                        ACTION_BUTTON_CONFIG.find(a => a.key === c.action)?.colorTheme.badge || 'bg-slate-100'
+                                      }`}>
+                                        {c.action}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] text-slate-400 font-medium">
+                                        Pending
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <p 
+                                  onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    handleCustomerDoubleClick(c);
+                                  }}
+                                  title="Double-click to view complete Customer Details (Name, Street all data, City & Country)"
+                                  className={`text-xs font-semibold line-clamp-1 cursor-pointer hover:underline transition-colors ${
                                   isRedItem
-                                    ? 'text-red-700 bg-red-100'
+                                    ? 'text-red-950 font-bold'
                                     : isOrangeItem
-                                    ? 'text-orange-800 bg-orange-100'
+                                    ? 'text-orange-950 font-bold'
                                     : isBlueNoAddItem
-                                    ? 'text-blue-700 bg-blue-100'
-                                    : 'text-indigo-700 bg-indigo-100/60'
+                                    ? 'text-blue-950 font-bold'
+                                    : 'text-slate-800'
                                 }`}>
-                                  #{c.posnr}
-                                </span>
+                                  {c.customerName || <span className="italic text-slate-400 font-normal">[No Customer Name]</span>}
+                                </p>
 
-                                <div className="flex items-center gap-1">
-                                  {isRedItem && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
-                                      {getRedMatchedKeyword(c.customerName, c.status)}
-                                    </span>
-                                  )}
-                                  {isOrangeItem && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
-                                      {getOrangeMatchedKeyword(c.customerName, c.status)}
-                                    </span>
-                                  )}
-                                  {isBlueNoAddItem && (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-blue-600 text-white">
-                                      NO add
-                                    </span>
-                                  )}
-                                  {c.action ? (
-                                    <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
-                                      ACTION_BUTTON_CONFIG.find(a => a.key === c.action)?.colorTheme.badge || 'bg-slate-100'
+                                <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5 tabular-nums">
+                                  <span>{c.rplEntries.length} RPL {c.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
+                                  {c.status && (
+                                    <span className={`font-semibold truncate max-w-[95px] ${
+                                      isRedItem
+                                        ? 'text-red-700 font-bold'
+                                        : isBlueNoAddItem
+                                        ? 'text-blue-700 font-bold'
+                                        : c.status.toLowerCase().includes('risk')
+                                        ? 'text-rose-600'
+                                        : 'text-slate-600'
                                     }`}>
-                                      {c.action}
-                                    </span>
-                                  ) : (
-                                    <span className="text-[9px] text-slate-400 font-medium">
-                                      Pending
+                                      {c.status}
                                     </span>
                                   )}
                                 </div>
                               </div>
-
-                              <p 
-                                onDoubleClick={(e) => {
-                                  e.stopPropagation();
-                                  handleCustomerDoubleClick(c);
-                                }}
-                                title="Double-click to view complete Customer Details (Name, Street all data, City & Country)"
-                                className={`text-xs font-semibold line-clamp-1 cursor-pointer hover:underline transition-colors ${
-                                isRedItem
-                                  ? 'text-red-950 font-bold'
-                                  : isOrangeItem
-                                  ? 'text-orange-950 font-bold'
-                                  : isBlueNoAddItem
-                                  ? 'text-blue-950 font-bold'
-                                  : 'text-slate-800'
-                              }`}>
-                                {c.customerName || <span className="italic text-slate-400 font-normal">[No Customer Name]</span>}
-                              </p>
-
-                              <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5 tabular-nums">
-                                <span>{c.rplEntries.length} RPL {c.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
-                                {c.status && (
-                                  <span className={`font-semibold truncate max-w-[95px] ${
-                                    isRedItem
-                                      ? 'text-red-700 font-bold'
-                                      : isBlueNoAddItem
-                                      ? 'text-blue-700 font-bold'
-                                      : c.status.toLowerCase().includes('risk')
-                                      ? 'text-rose-600'
-                                      : 'text-slate-600'
-                                  }`}>
-                                    {c.status}
-                                  </span>
-                                )}
-                              </div>
+                            );
+                          })}
+                          {filteredCases.length > visibleSidebarCases.length && (
+                            <div className="p-3 bg-white text-center border-t border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => setSidebarRenderLimit(prev => prev + 300)}
+                                className="w-full py-1.5 px-3 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer tabular-nums"
+                              >
+                                Show 300 more ({(filteredCases.length - visibleSidebarCases.length).toLocaleString()} remaining)
+                              </button>
                             </div>
-                          );
-                        })
+                          )}
+                        </>
                       )}
                     </div>
 

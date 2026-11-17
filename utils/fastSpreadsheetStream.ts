@@ -427,15 +427,20 @@ const parseXlsxStyles = async (
   return styles;
 };
 
+interface WorkbookSheetMeta {
+  name: string;
+  path: string;
+}
+
 const parseWorkbookMeta = async (
   file: File,
   entries: Map<string, ZipEntry>
-): Promise<{ sheet1Path: string; date1904: boolean }> => {
-  let sheet1Path = 'xl/worksheets/sheet1.xml';
+): Promise<{ sheet1Path: string; sheets: WorkbookSheetMeta[]; date1904: boolean }> => {
+  const defaultSheet: WorkbookSheetMeta = { name: 'Sheet1', path: 'xl/worksheets/sheet1.xml' };
   let date1904 = false;
 
   const wbEntry = entries.get('xl/workbook.xml');
-  if (!wbEntry) return { sheet1Path, date1904 };
+  if (!wbEntry) return { sheet1Path: defaultSheet.path, sheets: [defaultSheet], date1904 };
 
   const wbXml = await readZipEntryText(file, wbEntry);
 
@@ -447,34 +452,46 @@ const parseWorkbookMeta = async (
     }
   }
 
-  // Find first <sheet ... r:id="..."/>
-  const sheetMatch = wbXml.match(/<sheet\b([^>]*)\/?>/);
-  if (sheetMatch) {
-    const rId = parseAttr(sheetMatch[1], 'r:id') || parseAttr(sheetMatch[1], 'id');
-    if (rId) {
-      const relsEntry = entries.get('xl/_rels/workbook.xml.rels');
-      if (relsEntry) {
-        const relsXml = await readZipEntryText(file, relsEntry);
-        const relRe = /<Relationship\b([^>]*)\/?>/g;
-        let rm: RegExpExecArray | null;
-        while ((rm = relRe.exec(relsXml)) !== null) {
-          if (parseAttr(rm[1], 'Id') === rId) {
-            let target = parseAttr(rm[1], 'Target');
-            if (target) {
-              target = target.replace(/^(\.\.\/)+/, '').replace(/^\/+/, '');
-              if (!target.startsWith('xl/')) {
-                target = `xl/${target}`;
-              }
-              sheet1Path = target;
-            }
-            break;
-          }
+  const relsMap = new Map<string, string>();
+  const relsEntry = entries.get('xl/_rels/workbook.xml.rels');
+  if (relsEntry) {
+    const relsXml = await readZipEntryText(file, relsEntry);
+    const relRe = /<Relationship\b([^>]*)\/?>/g;
+    let rm: RegExpExecArray | null;
+    while ((rm = relRe.exec(relsXml)) !== null) {
+      const id = parseAttr(rm[1], 'Id');
+      let target = parseAttr(rm[1], 'Target');
+      if (id && target) {
+        target = target.replace(/^(\.\.\/)+/, '').replace(/^\/+/, '');
+        if (!target.startsWith('xl/')) {
+          target = `xl/${target}`;
         }
+        relsMap.set(id, target);
       }
     }
   }
 
-  return { sheet1Path, date1904 };
+  const sheets: WorkbookSheetMeta[] = [];
+  const sheetRe = /<sheet\b([^>]*)\/?>/g;
+  let sm: RegExpExecArray | null;
+  while ((sm = sheetRe.exec(wbXml)) !== null) {
+    const name = unescapeXmlFast(parseAttr(sm[1], 'name') || `Sheet${sheets.length + 1}`);
+    const rId = parseAttr(sm[1], 'r:id') || parseAttr(sm[1], 'id');
+    const path = (rId && relsMap.get(rId)) || `xl/worksheets/sheet${sheets.length + 1}.xml`;
+    sheets.push({ name, path });
+  }
+
+  if (sheets.length === 0) {
+    sheets.push(defaultSheet);
+  }
+
+  return { sheet1Path: sheets[0].path, sheets, date1904 };
+};
+
+export const getXlsxSheetNames = async (file: File): Promise<string[]> => {
+  const entries = await parseZipDirectory(file);
+  const { sheets } = await parseWorkbookMeta(file, entries);
+  return sheets.map((s) => s.name);
 };
 
 // -------------------- STREAMING SHARED STRINGS PARSER --------------------
@@ -726,21 +743,30 @@ const parseXlsxRowXml = (
 export const streamXlsxFirstSheet = async (
   file: File,
   onRow: StreamedRowCallback,
-  options?: StreamReadOptions
+  options?: StreamReadOptions & { sheetName?: string; sheetIndex?: number }
 ): Promise<void> => {
   const maxCols = options?.maxCols ?? DEFAULT_MAX_COLS;
   const maxRows = options?.maxRows;
   const signal = options?.signal;
 
   const entries = await parseZipDirectory(file);
-  const { sheet1Path, date1904 } = await parseWorkbookMeta(file, entries);
+  const { sheet1Path, sheets, date1904 } = await parseWorkbookMeta(file, entries);
 
-  let sheetEntry = entries.get(sheet1Path) || entries.get(sheet1Path.toLowerCase());
+  let targetPath = sheet1Path;
+  if (options?.sheetName) {
+    const found = sheets.find((s) => s.name === options.sheetName)
+      || sheets.find((s) => s.name.toLowerCase() === options.sheetName!.toLowerCase());
+    if (found) targetPath = found.path;
+  } else if (options?.sheetIndex !== undefined && sheets[options.sheetIndex]) {
+    targetPath = sheets[options.sheetIndex].path;
+  }
+
+  let sheetEntry = entries.get(targetPath) || entries.get(targetPath.toLowerCase());
   if (!sheetEntry) {
     sheetEntry = entries.get('xl/worksheets/sheet1.xml');
   }
   if (!sheetEntry) {
-    throw new Error('Could not find Sheet 1 inside the XLSX workbook.');
+    throw new Error('Could not find worksheet data inside the XLSX workbook.');
   }
 
   // Note: If preflight only needs row 0 (headers) when maxRows === 1?
@@ -1116,7 +1142,7 @@ export const sniffFileFormat = async (
 const streamViaSheetJsFallback = async (
   file: File,
   onRow: StreamedRowCallback,
-  options?: StreamReadOptions
+  options?: StreamReadOptions & { sheetName?: string; sheetIndex?: number }
 ): Promise<void> => {
   const maxCols = options?.maxCols ?? DEFAULT_MAX_COLS;
   const maxRows = options?.maxRows;
@@ -1143,7 +1169,16 @@ const streamViaSheetJsFallback = async (
     throw new Error('Workbook contains no readable sheets or tabs.');
   }
 
-  const sheetName = wb.SheetNames[0];
+  let sheetName = wb.SheetNames[0];
+  if (options?.sheetName) {
+    const matched =
+      wb.SheetNames.find((s) => s === options.sheetName) ||
+      wb.SheetNames.find((s) => s.toLowerCase() === options.sheetName!.toLowerCase());
+    if (matched) sheetName = matched;
+  } else if (options?.sheetIndex !== undefined && wb.SheetNames[options.sheetIndex]) {
+    sheetName = wb.SheetNames[options.sheetIndex];
+  }
+
   const ws = wb.Sheets[sheetName];
   if (!ws) {
     throw new Error(`Sheet "${sheetName}" is empty or could not be loaded.`);
@@ -1203,7 +1238,7 @@ const streamViaSheetJsFallback = async (
 export const streamSpreadsheetRows = async (
   file: File,
   onRow: StreamedRowCallback,
-  options?: StreamReadOptions
+  options?: StreamReadOptions & { sheetName?: string; sheetIndex?: number }
 ): Promise<'xlsx' | 'csv' | 'sheetjs'> => {
   const format = await sniffFileFormat(file);
   if (format === 'xlsx') {
@@ -1474,12 +1509,19 @@ const formatXmlCell = (
   return `<c r="${cellRef}"${isHeader ? ' s="2"' : ''} t="inlineStr"><is><t${preserve}>${esc}</t></is></c>`;
 };
 
+const sanitizeSheetName = (name: string): string => {
+  const cleaned = String(name || 'Sheet1').replace(/[:\\/?*\[\]]/g, '_').trim();
+  return (cleaned || 'Sheet1').slice(0, 31);
+};
+
 export const buildFastXlsxBlob = async (
   sheet1: FastSheetSpec,
-  sheet2: FastSheetSpec,
+  sheet2?: FastSheetSpec,
   signal?: AbortSignal
 ): Promise<Blob> => {
   const zip = new FastStreamingZipBuilder();
+  const s1Name = sanitizeSheetName(sheet1.name);
+  const s2Name = sheet2 ? sanitizeSheetName(sheet2.name) : '';
 
   await zip.addStaticXmlEntry(
     '[Content_Types].xml',
@@ -1489,7 +1531,9 @@ export const buildFastXlsxBlob = async (
       '<Default Extension="xml" ContentType="application/xml"/>' +
       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
       '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
-      '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      (sheet2
+        ? '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        : '') +
       '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
       '</Types>'
   );
@@ -1507,8 +1551,8 @@ export const buildFastXlsxBlob = async (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<sheets>' +
-      `<sheet name="${escapeXmlText(sheet1.name)}" sheetId="1" r:id="rId1"/>` +
-      `<sheet name="${escapeXmlText(sheet2.name)}" sheetId="2" r:id="rId2"/>` +
+      `<sheet name="${escapeXmlText(s1Name)}" sheetId="1" r:id="rId1"/>` +
+      (sheet2 ? `<sheet name="${escapeXmlText(s2Name)}" sheetId="2" r:id="rId2"/>` : '') +
       '</sheets>' +
       '</workbook>'
   );
@@ -1518,8 +1562,10 @@ export const buildFastXlsxBlob = async (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
       '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
-      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' +
-      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      (sheet2
+        ? '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' +
+          '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+        : '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>') +
       '</Relationships>'
   );
 
@@ -1595,6 +1641,7 @@ export const buildFastXlsxBlob = async (
         excelRowNum++;
       }
 
+      let flushCount = 0;
       for (let i = 0; i < spec.rows.length; i++) {
         if (signal?.aborted) {
           throw new Error('Consolidation was cancelled by the user.');
@@ -1613,7 +1660,8 @@ export const buildFastXlsxBlob = async (
         if (rowParts.length >= 2500) {
           await emit(rowParts.join(''));
           rowParts = [];
-          if (i % 15000 === 0) {
+          flushCount++;
+          if (flushCount % 4 === 0) {
             await yieldToUi();
           }
         }
@@ -1625,7 +1673,31 @@ export const buildFastXlsxBlob = async (
   };
 
   await writeSheetEntry('xl/worksheets/sheet1.xml', sheet1);
-  await writeSheetEntry('xl/worksheets/sheet2.xml', sheet2);
+  if (sheet2) {
+    await writeSheetEntry('xl/worksheets/sheet2.xml', sheet2);
+  }
 
   return zip.finishBlob();
+};
+
+/**
+ * Triggers a browser file download safely with delayed Blob URL revocation
+ * so large multi-megabyte files are never aborted mid-transfer in Chromium/iFrames.
+ */
+export const triggerBlobDownload = (blob: Blob, filename: string): void => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    if (a.parentNode) {
+      a.parentNode.removeChild(a);
+    }
+  }, 1500);
+  setTimeout(() => {
+    window.URL.revokeObjectURL(url);
+  }, 60000);
 };

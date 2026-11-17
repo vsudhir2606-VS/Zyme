@@ -22,6 +22,7 @@ import {
 } from '../utils/zymeE4hProcessor.ts';
 import * as XLSX from 'xlsx';
 import { safeSheetToAoA } from '../utils/excelSafety.ts';
+import { triggerBlobDownload } from '../utils/fastSpreadsheetStream.ts';
 
 interface ProcessorProps {
   highRiskKeywords?: string[];
@@ -162,15 +163,8 @@ export const Processor: React.FC<ProcessorProps> = ({
     const blob = new Blob([result.excelBuffer], { 
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
     });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
     const baseName = file?.name.replace(/\.[^/.]+$/, '') || 'Zyme_E4H_Report';
-    a.download = `Zyme_E4H_Processed_${baseName}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
+    triggerBlobDownload(blob, `Zyme_E4H_Processed_${baseName}.xlsx`);
   };
 
   const handleReset = () => {

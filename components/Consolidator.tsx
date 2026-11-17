@@ -34,6 +34,7 @@ import {
   DateFilterMode,
   getLocalTodayYmd
 } from '../utils/consolidatorProcessor.ts';
+import { triggerBlobDownload } from '../utils/fastSpreadsheetStream.ts';
 
 const formatDisplayDate = (ymd: string): string => {
   if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
@@ -237,38 +238,30 @@ export const Consolidator: React.FC = () => {
 
   const handleDownloadExcel = () => {
     if (!processedResult || !processedResult.excelBlob) return;
-    const url = window.URL.createObjectURL(processedResult.excelBlob);
-    const a = document.createElement('a');
-    a.href = url;
     const dateTag =
       dateFilterMode === 'today'
         ? todayYmd
         : dateFilterMode === 'single'
         ? selectedDate
         : `${startDate}_to_${endDate}`;
-    a.download = `Zyme_Consolidated_${processedResult.fileCount}_Files_${dateTag}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
+    triggerBlobDownload(
+      processedResult.excelBlob,
+      `Zyme_Consolidated_${processedResult.fileCount}_Files_${dateTag}.xlsx`
+    );
   };
 
   const handleDownloadCsv = () => {
     if (!processedResult || !processedResult.csvBlob) return;
-    const url = window.URL.createObjectURL(processedResult.csvBlob);
-    const a = document.createElement('a');
-    a.href = url;
     const dateTag =
       dateFilterMode === 'today'
         ? todayYmd
         : dateFilterMode === 'single'
         ? selectedDate
         : `${startDate}_to_${endDate}`;
-    a.download = `Zyme_Consolidated_${processedResult.fileCount}_Files_${dateTag}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
+    triggerBlobDownload(
+      processedResult.csvBlob,
+      `Zyme_Consolidated_${processedResult.fileCount}_Files_${dateTag}.csv`
+    );
   };
 
   const handleReset = () => {
