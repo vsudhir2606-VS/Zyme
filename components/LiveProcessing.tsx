@@ -126,6 +126,8 @@ export type LiveActionType =
   | 'CN'
   | 'BLOC'
   | 'Escalate'
+  | 'NPS'
+  | 'Research'
   | 'APRV';
 
 export interface ActionButtonDef {
@@ -298,6 +300,30 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
       dot: 'bg-purple-600',
     },
   },
+  {
+    key: 'NPS',
+    label: 'NPS',
+    shortcut: 'N',
+    description: 'NPS decision',
+    colorTheme: {
+      badge: 'bg-cyan-100 text-cyan-900 border-cyan-300 font-bold',
+      normal: 'hover:border-cyan-500 hover:bg-cyan-50 text-cyan-900 border-cyan-300 bg-cyan-50/40',
+      active: 'bg-cyan-600 text-white border-cyan-700 ring-2 ring-cyan-300 shadow-sm',
+      dot: 'bg-cyan-600',
+    },
+  },
+  {
+    key: 'Research',
+    label: 'Research',
+    shortcut: 'R',
+    description: 'Requires additional research / verification',
+    colorTheme: {
+      badge: 'bg-indigo-100 text-indigo-900 border-indigo-300 font-bold',
+      normal: 'hover:border-indigo-500 hover:bg-indigo-50 text-indigo-900 border-indigo-300 bg-indigo-50/40',
+      active: 'bg-indigo-600 text-white border-indigo-700 ring-2 ring-indigo-300 shadow-sm',
+      dot: 'bg-indigo-600',
+    },
+  },
 ];
 
 export interface LiveRplEntry {
@@ -329,6 +355,8 @@ export interface LiveProcessingCase {
   street?: string;
   streetAll?: string;
   streetDetails?: { label: string; value: string }[];
+  matchingName?: string;
+  matchingNames?: string[];
   city?: string;
   postalCode?: string;
   state?: string;
@@ -620,6 +648,54 @@ export const getCustomerBoxTheme = (
     };
   }
 
+  // NPS action: cyan color
+  if (action === 'NPS') {
+    return {
+      type: 'cyan' as const,
+      containerClass: 'border-2 border-cyan-500 bg-cyan-50/95 shadow-md ring-2 ring-cyan-300/60',
+      posnrClass: 'bg-cyan-600',
+      badge: {
+        text: 'NPS',
+        className: 'bg-cyan-600 text-white shadow-2xs',
+        isAlert: false,
+      },
+      nameCardClass: 'p-3.5 rounded-xl bg-cyan-100/85 border border-cyan-300 shadow-2xs',
+      labelClass: 'text-cyan-800 font-extrabold',
+      nameClass: 'text-cyan-950 font-black',
+      statusBadgeClass: 'bg-cyan-600 text-white border-cyan-700 font-black',
+      subBorderClass: 'border-cyan-200/80 text-cyan-900/80',
+      subLabelClass: 'text-cyan-700/80 font-medium',
+      countryBadgeClass: 'bg-cyan-100 text-cyan-900 border border-cyan-200',
+      countryPinClass: 'text-cyan-600',
+      actionLabelClass: 'text-cyan-700',
+      actionBorderClass: 'border-cyan-200/80',
+    };
+  }
+
+  // Research action: indigo color
+  if (action === 'Research') {
+    return {
+      type: 'indigo' as const,
+      containerClass: 'border-2 border-indigo-500 bg-indigo-50/95 shadow-md ring-2 ring-indigo-300/60',
+      posnrClass: 'bg-indigo-600',
+      badge: {
+        text: 'Research',
+        className: 'bg-indigo-600 text-white shadow-2xs',
+        isAlert: false,
+      },
+      nameCardClass: 'p-3.5 rounded-xl bg-indigo-100/85 border border-indigo-300 shadow-2xs',
+      labelClass: 'text-indigo-800 font-extrabold',
+      nameClass: 'text-indigo-950 font-black',
+      statusBadgeClass: 'bg-indigo-600 text-white border-indigo-700 font-black',
+      subBorderClass: 'border-indigo-200/80 text-indigo-900/80',
+      subLabelClass: 'text-indigo-700/80 font-medium',
+      countryBadgeClass: 'bg-indigo-100 text-indigo-900 border border-indigo-200',
+      countryPinClass: 'text-indigo-600',
+      actionLabelClass: 'text-indigo-700',
+      actionBorderClass: 'border-indigo-200/80',
+    };
+  }
+
   // 1. If no action assigned yet: ONLY APRV in name/status -> RED
   const isRedAlert = isRedNameMatch(customerName, status);
   if (isRedAlert) {
@@ -765,6 +841,16 @@ export const getSidebarItemStyle = (
       ? 'bg-purple-100/80 border-l-purple-600 shadow-2xs' 
       : 'border-l-purple-600 bg-purple-50/40 hover:bg-purple-100/40';
   }
+  if (action === 'NPS') {
+    return isSelected 
+      ? 'bg-cyan-100/80 border-l-cyan-600 shadow-2xs' 
+      : 'border-l-cyan-600 bg-cyan-50/40 hover:bg-cyan-100/40';
+  }
+  if (action === 'Research') {
+    return isSelected 
+      ? 'bg-indigo-100/80 border-l-indigo-600 shadow-2xs' 
+      : 'border-l-indigo-600 bg-indigo-50/40 hover:bg-indigo-100/40';
+  }
   if (isRedItem) {
     return isSelected 
       ? 'bg-red-100/70 border-l-red-600 shadow-2xs' 
@@ -872,6 +958,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   } | null>(null);
   const [copiedSplId, setCopiedSplId] = useState(false);
   const [copiedRplText, setCopiedRplText] = useState<string | null>(null);
+  const [copiedAllRpls, setCopiedAllRpls] = useState(false);
   const [copiedCustomerText, setCopiedCustomerText] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -902,7 +989,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const handleRplDoubleClick = (rpl: LiveRplEntry) => {
     const info = getSplIdFromRpl(rpl);
     const custAddr = activeCase 
-      ? [activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ')
+      ? [activeCase.streetAll || activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ')
       : '';
     setInspectingSplRpl({
       rpl,
@@ -944,6 +1031,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     partnerId?: string;
     streetAll: string;
     streetLines: { label: string; value: string }[];
+    matchingName?: string;
     city: string;
     country: string;
     state?: string;
@@ -967,6 +1055,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       partnerId: targetCase.partnerId || '',
       streetAll,
       streetLines,
+      matchingName: targetCase.matchingName || '',
       city: targetCase.city || '',
       country: targetCase.country || '',
       state: targetCase.state || '',
@@ -1030,6 +1119,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   // Multiple ticks (immediate, animationFrame, and 25ms timeout) guarantee it stays at top from the beginning
   useEffect(() => {
     setRplSearchQuery('');
+    setCopiedAllRpls(false);
     resetScrollToTop();
     const rafId = requestAnimationFrame(resetScrollToTop);
     const timeoutId = setTimeout(resetScrollToTop, 25);
@@ -1211,12 +1301,16 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       );
     }
 
-    const matchIdx = findCol(headers, ['match', 'keywordmatch', 'commonkeyword']);
+    const matchIdx = findCol(
+      headers,
+      ['matchingname', 'matchname', 'matchedname', 'keywordmatch', 'commonkeyword', 'matchword', 'matchingword', 'match'],
+      ['percent', 'score', 'screening', 'status', 'date']
+    );
     const statusIdx = findCol(headers, ['status', 'stat']);
     const seqIdx = findCol(headers, ['sequenceno', 'seqno', 'sequence']);
     const countryIdx = findCol(headers, ['country', 'land', 'ctr']);
     const partnerIdIdx = findCol(headers, ['partnerid', 'partnerno', 'partner'], ['name', 'category', 'categ', 'buspartner']);
-    const streetIdx = findCol(headers, ['street', 'street1', 'address', 'address1'], ['rpl', 'category', 'categ']);
+    const streetIdx = findCol(headers, ['street', 'street1', 'address', 'address1'], ['rpl', 'category', 'categ', 'match']);
     const cityIdx = findCol(headers, ['city', 'town']);
     const postalCodeIdx = findCol(headers, ['postalcode', 'postcode', 'zip']);
     const typeOfListIdx = findCol(headers, ['typeoflist', 'listtype', 'list']);
@@ -1234,8 +1328,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     const notesColIdx = findCol(headers, ['reviewnotes', 'notes', 'comment', 'comments', 'remark', 'remarks']);
 
     // Collect all customer street/address column indices (all columns named 'street' / 'address')
-    // STRICT RULE: Exclude RPL street1 (RplStreet1 is RPL's street address, NOT customer address)
-    // Also exclude category, BP category, Bus.Partner Category, RPL name, status, screening
+    // STRICT RULE: Exclude RPL street1, Match column, category, RPL name, status, screening
     const customerStreetCols: { header: string; idx: number }[] = [];
     headers.forEach((h, idx) => {
       if (
@@ -1243,21 +1336,33 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         idx === nameIdx || 
         idx === posnrIdx || 
         idx === statusIdx || 
+        idx === matchIdx ||
+        idx === seqIdx ||
+        idx === partnerIdIdx ||
         idx === cityIdx || 
         idx === countryIdx || 
         idx === postalCodeIdx || 
         idx === typeOfListIdx || 
-        idx === splIdIdx
+        idx === splIdIdx ||
+        idx === screeningStatusIdx ||
+        idx === rplStreetIdx ||
+        idx === stateIdx ||
+        idx === actionColIdx ||
+        idx === notesColIdx
       ) {
         return;
       }
       const hClean = h.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-      // CRITICAL: RplStreet1 is RPL street address, NOT customer street address!
-      if (hClean.includes('rpl')) {
-        return;
-      }
-      if (hClean.includes('screening') || hClean.includes('status') || hClean.includes('category') || hClean.includes('categ')) {
+      // CRITICAL: RplStreet1 is RPL street address, and Match is matching name — NOT customer street address!
+      if (
+        hClean.includes('rpl') ||
+        hClean.includes('match') ||
+        hClean.includes('screening') ||
+        hClean.includes('status') ||
+        hClean.includes('category') ||
+        hClean.includes('categ')
+      ) {
         return;
       }
 
@@ -1268,7 +1373,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         hClean.includes('stras') || 
         hClean.includes('houseno') || 
         hClean.includes('building') ||
-        (idx === 6 || idx === 7 || idx === 8); // Columns G, H, I in clean report
+        (idx === 6 || idx === 7 || idx === 8); // Columns G, H, I in clean Sheet 1 report
 
       if (isCustomerStreet) {
         let label = headers[idx] || `Street ${customerStreetCols.length + 1}`;
@@ -1352,6 +1457,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           street: rawStreet || (rowStreetDetails.length > 0 ? rowStreetDetails[0].value : ''),
           streetAll: rowStreetDetails.map(d => d.value).join(', ') || rawStreet,
           streetDetails: rowStreetDetails,
+          matchingName: rawMatch || '',
+          matchingNames: rawMatch ? [rawMatch] : [],
           city: rawCity,
           postalCode: rawPostalCode,
           state: rawState,
@@ -1360,13 +1467,21 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           notes: rawExistingNote || '',
         };
         caseCounter++;
-      } else if (rowStreetDetails.length > 0 && currentCase.streetDetails) {
-        rowStreetDetails.forEach(newDetail => {
-          if (!currentCase!.streetDetails!.some(d => d.value.toLowerCase() === newDetail.value.toLowerCase())) {
-            currentCase!.streetDetails!.push(newDetail);
+      } else {
+        if (rowStreetDetails.length > 0 && currentCase.streetDetails) {
+          rowStreetDetails.forEach(newDetail => {
+            if (!currentCase!.streetDetails!.some(d => d.value.toLowerCase() === newDetail.value.toLowerCase())) {
+              currentCase!.streetDetails!.push(newDetail);
+            }
+          });
+          currentCase.streetAll = currentCase.streetDetails.map(d => d.value).join(', ') || currentCase.street;
+        }
+        if (rawMatch && currentCase.matchingNames) {
+          if (!currentCase.matchingNames.some(m => m.toLowerCase() === rawMatch.toLowerCase())) {
+            currentCase.matchingNames.push(rawMatch);
+            currentCase.matchingName = currentCase.matchingNames.join(', ');
           }
-        });
-        currentCase.streetAll = currentCase.streetDetails.map(d => d.value).join(', ') || currentCase.street;
+        }
       }
 
       if (!currentCase.notes && rawExistingNote) {
@@ -1410,13 +1525,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       builtCases.push(currentCase);
     }
 
-    // Evaluate "NO add" condition on each case:
-    // If E, F, G columns (or mapped address columns street, city, postalCode) are blank,
-    // mark as NO add so it displays in blue in Live Processing (just like ZKWD displays in red).
+    // Evaluate "NO add" condition & fallback Matching Name if file lacked explicit Match column
     const hasAddressCols = streetIdx >= 0 || cityIdx >= 0 || postalCodeIdx >= 0;
     const isEFGNotNameOrRpl =
       nameIdx !== 4 && nameIdx !== 5 && nameIdx !== 6 &&
       rplIdx !== 4 && rplIdx !== 5 && rplIdx !== 6;
+    const matchCommonStopWords = new Set(['the', 'and', 'for', 'inc', 'ltd', 'llc', 'co', 'corp', 'gmbh', 'sa', 'bv', 'pty', 'plc', 'of', 'in', 'to']);
 
     builtCases.forEach(c => {
       const isAddressBlank =
@@ -1442,6 +1556,40 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         // If status does not already have a red alert keyword or NO add, set status to "NO add"
         if (!isRedNameMatch(c.customerName, c.status) && !alreadyNoAdd) {
           c.status = c.status ? `${c.status}, NO add` : 'NO add';
+        }
+      }
+
+      // If no match column values were found on this case and customerName exists, compute matched tokens across RPL names
+      if ((!c.matchingNames || c.matchingNames.length === 0) && c.customerName) {
+        const custClean = c.customerName.trim();
+        const exactFound = c.rplEntries.some(e => isExact100Match(custClean, e.rplName));
+        if (exactFound) {
+          c.matchingNames = ['Exact match'];
+          c.matchingName = 'Exact match';
+        } else {
+          const custWords = Array.from(new Set(
+            custClean
+              .toLowerCase()
+              .replace(/[^a-z0-9\s]/g, ' ')
+              .split(/\s+/)
+              .filter(w => w.length >= 2 && !matchCommonStopWords.has(w))
+          ));
+          const matchedWords: string[] = [];
+          const matchedLower = new Set<string>();
+          for (const entry of c.rplEntries) {
+            const rplClean = (entry.rplName || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+            const rplWordSet = new Set(rplClean.split(/\s+/).filter(Boolean));
+            for (const w of custWords) {
+              if (rplWordSet.has(w) && !matchedLower.has(w)) {
+                matchedLower.add(w);
+                matchedWords.push(w.toUpperCase());
+              }
+            }
+          }
+          if (matchedWords.length > 0) {
+            c.matchingNames = matchedWords;
+            c.matchingName = matchedWords.join(', ');
+          }
         }
       }
     });
@@ -1664,6 +1812,24 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       (entry.rplName || '').toLowerCase().includes(q)
     );
   }, [activeCase, rplSearchQuery]);
+
+  const handleCopyAllRpls = () => {
+    if (!activeCase) return;
+    const sourceEntries = displayedRplEntries.length > 0 ? displayedRplEntries : activeCase.rplEntries;
+    const seen = new Set<string>();
+    const names: string[] = [];
+    sourceEntries.forEach(entry => {
+      const name = (entry.rplName || '').trim();
+      if (name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        names.push(name);
+      }
+    });
+    if (names.length === 0) return;
+    navigator.clipboard?.writeText(names.join('\n'));
+    setCopiedAllRpls(true);
+    setTimeout(() => setCopiedAllRpls(false), 2000);
+  };
 
   // Count of 100% exact matches in active case
   const exactMatchCount = useMemo(() => {
@@ -2754,7 +2920,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   </div>
                                 </div>
 
-                                {/* Partner ID & Address details */}
+                                {/* Partner ID, Address & Matching Name details */}
                                 <div className={`pt-2 border-t space-y-1.5 text-xs ${boxTheme.subBorderClass}`}>
                                   {activeCase.partnerId && (
                                     <div className="flex items-center justify-between">
@@ -2762,11 +2928,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                       <span className="font-mono font-semibold tabular-nums">{activeCase.partnerId}</span>
                                     </div>
                                   )}
-                                  {[activeCase.street, activeCase.city, activeCase.postalCode, activeCase.state].filter(Boolean).length > 0 ? (
+                                  {[activeCase.streetAll || activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).length > 0 ? (
                                     <div className="text-xs">
                                       <span className={`${boxTheme.subLabelClass} mr-1.5`}>Address:</span>
-                                      <span className="font-medium">
-                                        {[activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ')}
+                                      <span className="font-medium break-words">
+                                        {[activeCase.streetAll || activeCase.street, activeCase.city, activeCase.state, activeCase.postalCode].filter(Boolean).join(', ')}
                                       </span>
                                     </div>
                                   ) : (
@@ -2777,6 +2943,20 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                       </span>
                                     </div>
                                   )}
+                                  <div className="text-xs flex items-start gap-1.5 flex-wrap pt-0.5">
+                                    <span className={`${boxTheme.subLabelClass} flex-shrink-0`}>Matching Name:</span>
+                                    {activeCase.matchingName ? (
+                                      <span className={`font-semibold break-words select-text ${
+                                        activeCase.matchingName.toLowerCase().includes('exact match')
+                                          ? 'text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200 font-bold'
+                                          : 'text-indigo-800 bg-indigo-50/90 px-1.5 py-0.5 rounded border border-indigo-200'
+                                      }`}>
+                                        {activeCase.matchingName}
+                                      </span>
+                                    ) : (
+                                      <span className="italic text-slate-400">None</span>
+                                    )}
+                                  </div>
                                 </div>
 
                               </div>
@@ -2854,6 +3034,33 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               }`}>
                                 ({activeCase.rplEntries.length})
                               </span>
+                              {activeCase.rplEntries.some(r => (r.rplName || '').trim() !== '') && (
+                                <button
+                                  type="button"
+                                  onClick={handleCopyAllRpls}
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border transition-all cursor-pointer shadow-2xs ${
+                                    copiedAllRpls
+                                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                      : uiPreset === 'focus'
+                                        ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600'
+                                        : 'bg-white hover:bg-indigo-50 text-slate-600 hover:text-indigo-700 border-slate-200 hover:border-indigo-300'
+                                  }`}
+                                  title={rplSearchQuery.trim() ? 'Copy all matching RPL names' : 'Copy all RPL names for this Posnr'}
+                                  aria-label="Copy all RPL names"
+                                >
+                                  {copiedAllRpls ? (
+                                    <>
+                                      <Check size={11} strokeWidth={3} className="text-emerald-600" />
+                                      <span className="font-bold">Copied All!</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Copy size={11} />
+                                      <span>Copy All</span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
                               {uiPreset === 'auditor' && (
                                 <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-300">
                                   LEDGER
@@ -3033,7 +3240,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           )}
                         </div>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12 gap-1.5 sm:gap-2">
+                        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-8 gap-1.5 sm:gap-2">
                           {ACTION_BUTTON_CONFIG.map(btn => {
                             const isSelected = activeCase.action === btn.key;
                             return (
@@ -3209,7 +3416,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         {stats.percent}% Processed
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span className="hidden sm:inline">Shortcuts: [1–9, 0] Decision, [◀/▶] Navigate, [Q] List</span>
+                      <span className="hidden sm:inline">Shortcuts: [1–9, 0, A, N, R] Decision, [◀/▶] Navigate, [Q] List</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -3404,6 +3611,49 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                     </span>
                     <span className="text-slate-400 italic">No street address provided in dataset</span>
                   </div>
+                )}
+              </div>
+
+              {/* Matching Name */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold tracking-wider uppercase text-slate-500">
+                    Matching Name
+                  </span>
+                  {inspectingCustomer.matchingName && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard?.writeText(inspectingCustomer.matchingName || '');
+                        setCopiedCustomerField('matchingName');
+                        setTimeout(() => setCopiedCustomerField(null), 2000);
+                      }}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 transition-colors cursor-pointer"
+                    >
+                      {copiedCustomerField === 'matchingName' ? (
+                        <>
+                          <Check size={12} className="text-emerald-600" />
+                          <span className="text-emerald-600 font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy size={12} />
+                          <span>Copy Match</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                {inspectingCustomer.matchingName ? (
+                  <p className={`text-sm font-bold break-words select-text ${
+                    inspectingCustomer.matchingName.toLowerCase().includes('exact match')
+                      ? 'text-red-700'
+                      : 'text-indigo-900'
+                  }`}>
+                    {inspectingCustomer.matchingName}
+                  </p>
+                ) : (
+                  <span className="text-xs italic text-slate-400">No matching name data recorded</span>
                 )}
               </div>
 
