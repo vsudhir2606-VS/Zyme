@@ -89,6 +89,42 @@ async function startServer() {
     }
   });
 
+  // API endpoint to save RPL Match Excel list & ignored words config to persistent filesystem
+  app.post("/api/save-rpl-match-config", (req, res) => {
+    try {
+      const { config } = req.body;
+      const utilsDir = path.join(process.cwd(), "utils");
+      if (!fs.existsSync(utilsDir)) {
+        fs.mkdirSync(utilsDir, { recursive: true });
+      }
+      const filePath = path.join(utilsDir, "rplMatchConfig.json");
+      fs.writeFileSync(filePath, JSON.stringify(config || {}, null, 2), "utf-8");
+      res.json({
+        success: true,
+        count: Array.isArray(config?.listEntries) ? config.listEntries.length : 0,
+      });
+    } catch (err: any) {
+      console.error("Failed to save RPL match config to disk:", err);
+      res.status(500).json({ error: err.message || "Failed to save RPL match config" });
+    }
+  });
+
+  // API endpoint to retrieve RPL Match Excel list & ignored words config
+  app.get("/api/get-rpl-match-config", (req, res) => {
+    try {
+      const filePath = path.join(process.cwd(), "utils", "rplMatchConfig.json");
+      if (fs.existsSync(filePath)) {
+        const fileContent = fs.readFileSync(filePath, "utf-8");
+        res.json({ config: JSON.parse(fileContent) });
+      } else {
+        res.json({ config: null });
+      }
+    } catch (err: any) {
+      console.error("Failed to read RPL match config from disk:", err);
+      res.status(500).json({ error: err.message || "Failed to read RPL match config" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

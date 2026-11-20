@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check, Trash2, Search, BookmarkPlus, GitCompare } from 'lucide-react';
+import { Upload, FileSpreadsheet, ShieldAlert, Globe, Settings, CheckCircle2, Download, FileText, Loader2, RefreshCw, X, ChevronDown, ChevronRight, Zap, Layers, Activity, Table, FolderArchive, Sparkles, SlidersHorizontal, Lock, Unlock, KeyRound, Check, Trash2, Search, BookmarkPlus, GitCompare, Plus, RotateCcw, Filter, Layout, Monitor, Columns, CheckSquare } from 'lucide-react';
 import { TagInput } from './components/TagInput.tsx';
 import { Processor } from './components/Processor.tsx';
 import { LiveProcessing } from './components/LiveProcessing.tsx';
@@ -16,6 +16,14 @@ import {
   syncSplCcStorageWithServer,
   SavedSplCcComment 
 } from './utils/splCcStorage.ts';
+import {
+  MatchEngineConfig,
+  DEFAULT_IGNORED_WORDS,
+  DEFAULT_MATCH_ENGINE_CONFIG,
+  MATCH_ENGINE_UPDATED_EVENT,
+  loadMatchEngineConfig,
+  saveMatchEngineConfig,
+} from './utils/liveMatchEngine.ts';
 
 import { InventoryReport } from './components/InventoryReport.tsx';
 
@@ -89,9 +97,57 @@ export default function App() {
     }
   });
   const [exportNotice, setExportNotice] = useState<string | null>(null);
-  const [settingsActiveTab, setSettingsActiveTab] = useState<'splcc' | 'security'>('splcc');
+  const [settingsActiveTab, setSettingsActiveTab] = useState<'rpl_match' | 'splcc' | 'security'>('rpl_match');
 
-  // Load and sync saved SPL CC list from server and storage on startup so comments are never lost on refresh or update
+  // Potential Match (>51%) & Ignored Words State (unified with Live Processing)
+  const [matchConfig, setMatchConfig] = useState<MatchEngineConfig>(() => loadMatchEngineConfig());
+  const [matchSettingsNotice, setMatchSettingsNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [newIgnoredWordInput, setNewIgnoredWordInput] = useState('');
+  const [ignoredWordsFilter, setIgnoredWordsFilter] = useState('');
+
+  // Live Processing UI Layout Preset & Live Match Stats (managed inside Settings)
+  type LiveUiPresetOption = 'modern' | 'compact' | 'focus' | 'auditor';
+  const [liveUiPreset, setLiveUiPreset] = useState<LiveUiPresetOption>(() => {
+    try {
+      return (localStorage.getItem('zyme_live_ui_preset') as LiveUiPresetOption) || 'modern';
+    } catch {
+      return 'modern';
+    }
+  });
+  const [liveMatchStats, setLiveMatchStats] = useState<{
+    totalCases: number;
+    noMatchTotal: number;
+    noMatchPending: number;
+    potentialMatchTotal: number;
+    exactMatchTotal: number;
+  }>(() => {
+    const cached = (window as any).__zymeLiveMatchStats;
+    return cached || { totalCases: 0, noMatchTotal: 0, noMatchPending: 0, potentialMatchTotal: 0, exactMatchTotal: 0 };
+  });
+
+  const handleSelectLiveUiPreset = (preset: LiveUiPresetOption) => {
+    setLiveUiPreset(preset);
+    try {
+      localStorage.setItem('zyme_live_ui_preset', preset);
+      window.dispatchEvent(new CustomEvent('zyme:live-ui-preset-updated', { detail: preset }));
+    } catch {
+      // no-op
+    }
+  };
+
+  const handleTriggerBulkNoMatchFromSettings = () => {
+    setIsSettingsOpen(false);
+    if (activeTab !== 'live_processing') {
+      handleRequestOpenLiveProcessing();
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('zyme:trigger-bulk-no-match'));
+      }, 100);
+    } else {
+      window.dispatchEvent(new CustomEvent('zyme:trigger-bulk-no-match'));
+    }
+  };
+
+  // Load and sync saved SPL CC list from server and storage on startup
   useEffect(() => {
     syncSplCcStorageWithServer().then(list => {
       if (list && list.length > 0) {
@@ -100,7 +156,7 @@ export default function App() {
     });
   }, []);
 
-  // Sync saved SPL CC list whenever updated
+  // Sync saved SPL CC list, Match Engine Config, UI Preset & Live Match Stats whenever updated
   useEffect(() => {
     const handleSplCcUpdate = () => {
       try {
@@ -109,11 +165,35 @@ export default function App() {
         // no-op
       }
     };
+    const handleMatchConfigUpdate = () => {
+      setMatchConfig(loadMatchEngineConfig());
+    };
+    const handleUiPresetUpdate = () => {
+      try {
+        setLiveUiPreset((localStorage.getItem('zyme_live_ui_preset') as LiveUiPresetOption) || 'modern');
+      } catch {
+        // no-op
+      }
+    };
+    const handleLiveStatsUpdate = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail) {
+        setLiveMatchStats(detail);
+      }
+    };
     window.addEventListener('zyme:splcc-updated', handleSplCcUpdate);
+    window.addEventListener(MATCH_ENGINE_UPDATED_EVENT, handleMatchConfigUpdate);
+    window.addEventListener('zyme:live-ui-preset-updated', handleUiPresetUpdate);
+    window.addEventListener('zyme:live-match-stats-updated', handleLiveStatsUpdate);
     window.addEventListener('storage', handleSplCcUpdate);
+    window.addEventListener('storage', handleMatchConfigUpdate);
     return () => {
       window.removeEventListener('zyme:splcc-updated', handleSplCcUpdate);
+      window.removeEventListener(MATCH_ENGINE_UPDATED_EVENT, handleMatchConfigUpdate);
+      window.removeEventListener('zyme:live-ui-preset-updated', handleUiPresetUpdate);
+      window.removeEventListener('zyme:live-match-stats-updated', handleLiveStatsUpdate);
       window.removeEventListener('storage', handleSplCcUpdate);
+      window.removeEventListener('storage', handleMatchConfigUpdate);
     };
   }, []);
 
@@ -122,12 +202,88 @@ export default function App() {
     if (isSettingsOpen) {
       try {
         setSavedSplCcList(getSavedSplCcComments());
+        setMatchConfig(loadMatchEngineConfig());
+        setLiveUiPreset((localStorage.getItem('zyme_live_ui_preset') as LiveUiPresetOption) || 'modern');
+        const cachedStats = (window as any).__zymeLiveMatchStats;
+        if (cachedStats) {
+          setLiveMatchStats(cachedStats);
+        }
         setExportNotice(null);
+        setMatchSettingsNotice(null);
       } catch {
         // no-op
       }
     }
   }, [isSettingsOpen]);
+
+  const updateSettingsMatchConfig = (updater: (prev: MatchEngineConfig) => MatchEngineConfig) => {
+    setMatchConfig(prev => {
+      const next = updater(prev);
+      saveMatchEngineConfig(next);
+      return next;
+    });
+  };
+
+  const handleAddIgnoredWords = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const raw = newIgnoredWordInput.trim();
+    if (!raw) return;
+    const parts = raw
+      .split(/[,;\n]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (parts.length === 0) return;
+
+    updateSettingsMatchConfig(prev => {
+      const existingLower = new Set(prev.ignoredWords.map(w => w.toLowerCase()));
+      const toAdd: string[] = [];
+      for (const p of parts) {
+        if (!existingLower.has(p.toLowerCase())) {
+          existingLower.add(p.toLowerCase());
+          toAdd.push(p);
+        }
+      }
+      if (toAdd.length === 0) return prev;
+      return {
+        ...prev,
+        ignoredWords: [...toAdd, ...prev.ignoredWords],
+      };
+    });
+    setNewIgnoredWordInput('');
+  };
+
+  const handleRemoveIgnoredWord = (wordToRemove: string) => {
+    const targetLower = wordToRemove.toLowerCase();
+    updateSettingsMatchConfig(prev => ({
+      ...prev,
+      ignoredWords: prev.ignoredWords.filter(w => w.toLowerCase() !== targetLower),
+    }));
+  };
+
+  const handleResetIgnoredWords = () => {
+    const defaults: MatchEngineConfig = {
+      ...DEFAULT_MATCH_ENGINE_CONFIG,
+      ignoredWords: [...DEFAULT_IGNORED_WORDS],
+    };
+    setMatchConfig(defaults);
+    saveMatchEngineConfig(defaults);
+    setIgnoredWordsFilter('');
+    setMatchSettingsNotice({ type: 'success', text: 'Potential match threshold (51%) & ignored words reset to defaults.' });
+    setTimeout(() => setMatchSettingsNotice(null), 3500);
+  };
+
+  const handleToggleIgnoreCaseCity = () => {
+    updateSettingsMatchConfig(prev => ({
+      ...prev,
+      ignoreCityNames: !prev.ignoreCityNames,
+    }));
+  };
+
+  const filteredIgnoredWords = useMemo(() => {
+    if (!ignoredWordsFilter.trim()) return matchConfig.ignoredWords;
+    const q = ignoredWordsFilter.toLowerCase().trim();
+    return matchConfig.ignoredWords.filter(w => w.toLowerCase().includes(q));
+  }, [matchConfig.ignoredWords, ignoredWordsFilter]);
 
   useEffect(() => {
     localStorage.setItem('zyme_liveLockEnabled', JSON.stringify(isLiveLockEnabled));
@@ -653,10 +809,10 @@ export default function App() {
           </div>
         )}
 
-        {/* SETTINGS MODAL (Password Enable Option & Change Password Option) */}
+        {/* SETTINGS MODAL (RPL Match List, SPL CC Archive & Password Lock) */}
         {isSettingsOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-            <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl max-w-2xl w-full flex flex-col max-h-[88vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="bg-white rounded-3xl border border-slate-200/90 shadow-2xl max-w-3xl w-full flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
               
               {/* ELITE HEADER */}
               <div className="px-6 py-4.5 border-b border-slate-100 flex items-center justify-between bg-white flex-shrink-0">
@@ -669,7 +825,7 @@ export default function App() {
                       Settings & Controls
                     </h3>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      SPL CC comments repository, Excel export & access lock
+                      RPL match Excel list, ignored words, SPL CC repository & access lock
                     </p>
                   </div>
                 </div>
@@ -683,11 +839,31 @@ export default function App() {
               </div>
 
               {/* SEGMENTED TAB SWITCHER */}
-              <div className="px-6 pt-2 bg-slate-50/70 border-b border-slate-200/80 flex items-center gap-2 flex-shrink-0">
+              <div className="px-6 pt-2 bg-slate-50/70 border-b border-slate-200/80 flex items-center gap-2 overflow-x-auto flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSettingsActiveTab('rpl_match')}
+                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+                    settingsActiveTab === 'rpl_match'
+                      ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-xl -mb-px'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Filter size={15} className={settingsActiveTab === 'rpl_match' ? 'text-indigo-600' : 'text-slate-400'} />
+                  <span>Live Processing &amp; Match Rules</span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
+                    settingsActiveTab === 'rpl_match'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-200/80 text-slate-600'
+                  }`}>
+                    &gt;{matchConfig.potentialMatchThreshold}%
+                  </span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => setSettingsActiveTab('splcc')}
-                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer ${
+                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                     settingsActiveTab === 'splcc'
                       ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-xl -mb-px'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -707,14 +883,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setSettingsActiveTab('security')}
-                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer ${
+                  className={`inline-flex items-center gap-2 px-3.5 py-2.5 border-b-2 text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
                     settingsActiveTab === 'security'
                       ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-xl -mb-px'
                       : 'border-transparent text-slate-500 hover:text-slate-800'
                   }`}
                 >
                   <Lock size={15} className={settingsActiveTab === 'security' ? 'text-indigo-600' : 'text-slate-400'} />
-                  <span>Access & Security</span>
+                  <span>Access &amp; Security</span>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                     isLiveLockEnabled ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
                   }`}>
@@ -725,6 +901,313 @@ export default function App() {
 
               {/* MODAL BODY */}
               <div className="p-6 overflow-y-auto space-y-5 flex-1 min-h-0 bg-slate-50/40">
+
+                {/* TAB 0: POTENTIAL MATCH (>51%) & IGNORED WORDS */}
+                {settingsActiveTab === 'rpl_match' && (
+                  <div className="space-y-4">
+                    {/* Top Rule & Stat Overview */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Potential Match Rule
+                        </span>
+                        <div className="text-xl font-black text-amber-700 mt-1 tabular-nums flex items-baseline gap-1.5">
+                          <span>{matchConfig.potentialMatchEnabled ? `>${matchConfig.potentialMatchThreshold}%` : 'OFF'}</span>
+                          <span className="text-xs font-semibold text-slate-500">customer vs RPL</span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Space &amp; Special Chars
+                        </span>
+                        <div className="text-[11px] font-bold mt-1.5 flex items-center gap-1.5 flex-wrap">
+                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            RT ↔ R t
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            SMY ↔ S.M.Y
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                          Ignored Words
+                        </span>
+                        <div className="text-xl font-black text-indigo-700 mt-1 tabular-nums flex items-baseline gap-1.5">
+                          <span>{matchConfig.ignoredWords.length}</span>
+                          <span className="text-xs font-semibold text-slate-500">excluded</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {matchSettingsNotice && (
+                      <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
+                        matchSettingsNotice.type === 'error'
+                          ? 'bg-rose-50 border-rose-200 text-rose-800'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      }`}>
+                        {matchSettingsNotice.type === 'error' ? (
+                          <X size={14} className="text-rose-600 flex-shrink-0" />
+                        ) : (
+                          <Check size={14} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
+                        )}
+                        <span>{matchSettingsNotice.text}</span>
+                      </div>
+                    )}
+
+                    {/* Section 0: Bulk No-Match Action & Live Processing UI Layout */}
+                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-4">
+                      {/* Bulk No-Match Quick Action */}
+                      <div className="flex items-center justify-between gap-3 flex-wrap pb-3 border-b border-slate-100">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Bulk No-Match Action
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {liveMatchStats.totalCases > 0
+                              ? `${liveMatchStats.noMatchTotal.toLocaleString()} No-Match cases detected (${liveMatchStats.noMatchPending.toLocaleString()} pending review) in the active Live Processing file.`
+                              : 'Load a file in Live Processing to open and apply bulk decisions to all No-Match cases.'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleTriggerBulkNoMatchFromSettings}
+                          disabled={liveMatchStats.noMatchTotal === 0}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed text-emerald-900 text-xs font-bold shadow-2xs transition-all cursor-pointer tabular-nums"
+                        >
+                          <CheckSquare size={14} className="text-emerald-700" />
+                          <span>
+                            Bulk No-Match{liveMatchStats.noMatchTotal > 0 ? ` (${liveMatchStats.noMatchPending > 0 ? liveMatchStats.noMatchPending : liveMatchStats.noMatchTotal})` : ''}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* UI Layout Preset Switcher */}
+                      <div className="space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-900">
+                              Live Processing UI Layout
+                            </h4>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              Choose the workspace visual density and theme for Live Processing.
+                            </p>
+                          </div>
+                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold">
+                            UI: {liveUiPreset === 'modern' ? 'Modern' : liveUiPreset === 'compact' ? 'High-Density' : liveUiPreset === 'focus' ? 'Focus' : 'Auditor'}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {([
+                            { id: 'modern' as const, label: 'Modern', desc: 'Balanced & clean', icon: Layout },
+                            { id: 'compact' as const, label: 'High-Density', desc: 'Compact view', icon: Layers },
+                            { id: 'focus' as const, label: 'Focus', desc: 'Dark command', icon: Monitor },
+                            { id: 'auditor' as const, label: 'Auditor', desc: 'Structured grid', icon: Columns },
+                          ]).map((item) => {
+                            const Icon = item.icon;
+                            const active = liveUiPreset === item.id;
+                            return (
+                              <button
+                                key={item.id}
+                                type="button"
+                                onClick={() => handleSelectLiveUiPreset(item.id)}
+                                className={`flex flex-col items-start gap-1 p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                                  active
+                                    ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-300 shadow-2xs'
+                                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between w-full">
+                                  <Icon size={14} className={active ? 'text-indigo-600' : 'text-slate-500'} />
+                                  {active && <Check size={12} strokeWidth={3} className="text-indigo-600" />}
+                                </div>
+                                <span className={`text-xs font-bold ${active ? 'text-indigo-950' : 'text-slate-800'}`}>
+                                  {item.label}
+                                </span>
+                                <span className="text-[10px] text-slate-500 leading-tight">
+                                  {item.desc}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Section 1: Customer vs RPL Potential Match Threshold */}
+                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Customer vs RPL Potential Match (&gt;{matchConfig.potentialMatchThreshold}%)
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Automatically reflects a case &amp; RPL hit as <strong>Potential Match</strong> when the RPL name matches the customer name by more than your set percentage — including space &amp; special-character variations like <strong>RT</strong> ↔ <strong>R t</strong> and <strong>SMY</strong> ↔ <strong>S.M.Y</strong>.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => updateSettingsMatchConfig(prev => ({ ...prev, potentialMatchEnabled: !prev.potentialMatchEnabled }))}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer flex-shrink-0 ${
+                            matchConfig.potentialMatchEnabled ? 'bg-amber-500' : 'bg-slate-300'
+                          }`}
+                          role="switch"
+                          aria-checked={matchConfig.potentialMatchEnabled}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                              matchConfig.potentialMatchEnabled ? 'translate-x-6' : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      {matchConfig.potentialMatchEnabled && (
+                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold text-slate-700">
+                              Potential Match threshold:
+                            </span>
+                            <span className="text-xs font-bold text-slate-500">&gt;</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={99}
+                              value={matchConfig.potentialMatchThreshold}
+                              onChange={(e) => {
+                                const parsed = parseInt(e.target.value, 10);
+                                if (!Number.isNaN(parsed)) {
+                                  const clamped = Math.max(1, Math.min(99, parsed));
+                                  updateSettingsMatchConfig(prev => ({ ...prev, potentialMatchThreshold: clamped }));
+                                }
+                              }}
+                              className="w-16 px-2 py-1 text-xs font-bold text-center bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white tabular-nums"
+                            />
+                            <span className="text-xs font-bold text-slate-600">%</span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {[51, 60, 70, 75].map(preset => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => updateSettingsMatchConfig(prev => ({ ...prev, potentialMatchThreshold: preset }))}
+                                className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer tabular-nums ${
+                                  matchConfig.potentialMatchThreshold === preset
+                                    ? 'bg-amber-500 text-white border-amber-600'
+                                    : 'bg-slate-50 hover:bg-amber-50 text-slate-700 border-slate-200'
+                                }`}
+                              >
+                                &gt;{preset}%{preset === 51 ? ' Default' : ''}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Section 2: Ignored / Excluded Words & City Names */}
+                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Ignored Words &amp; City Names
+                          </h4>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            Words below (City names, Technology, LLC, Inc, PVT, Development, Ltd, Limited, IT, Solution, INDIA, INSTITUTE, Science, SCIENTIFIC, Research, infotech, CONG, TY, TNHH, International, system, constuction, services, management, etc.) are excluded before calculating Potential Match (&gt;{matchConfig.potentialMatchThreshold}%) and Matching Keywords.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={handleResetIgnoredWords}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:text-indigo-700 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                          title="Restore default threshold (51%) and ignored words"
+                        >
+                          <RotateCcw size={12} />
+                          <span>Reset Defaults</span>
+                        </button>
+                      </div>
+
+                      {/* Dynamic City Names Auto-Ignore Toggle */}
+                      <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-indigo-50/60 border border-indigo-100 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={matchConfig.ignoreCityNames}
+                          onChange={handleToggleIgnoreCaseCity}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-xs font-semibold text-indigo-950">
+                          Automatically exclude major global cities &amp; each file&apos;s City column values during matching
+                        </span>
+                      </label>
+
+                      {/* Add New Word(s) Form */}
+                      <form onSubmit={handleAddIgnoredWords} className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={newIgnoredWordInput}
+                          onChange={(e) => setNewIgnoredWordInput(e.target.value)}
+                          placeholder="Add word or phrase to ignore (comma-separated allowed, e.g. Holdings, Pune)..."
+                          className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                        />
+                        <button
+                          type="submit"
+                          disabled={!newIgnoredWordInput.trim()}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                        >
+                          <Plus size={14} />
+                          <span>Add Word</span>
+                        </button>
+                      </form>
+
+                      {/* Filter & Removable Chips List */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="relative flex-1 max-w-xs">
+                            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                            <input
+                              type="text"
+                              value={ignoredWordsFilter}
+                              onChange={(e) => setIgnoredWordsFilter(e.target.value)}
+                              placeholder="Filter ignored words..."
+                              className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                          <span className="text-[11px] text-slate-500 tabular-nums">
+                            {filteredIgnoredWords.length} of {matchConfig.ignoredWords.length} words
+                          </span>
+                        </div>
+
+                        <div className="max-h-44 overflow-y-auto flex flex-wrap gap-1.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 scrollbar-thin">
+                          {filteredIgnoredWords.map((word) => (
+                            <span
+                              key={word}
+                              className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-700 shadow-2xs"
+                            >
+                              <span>{word}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveIgnoredWord(word)}
+                                className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                title={`Remove "${word}" from ignored words`}
+                                aria-label={`Remove ${word}`}
+                              >
+                                <X size={11} />
+                              </button>
+                            </span>
+                          ))}
+                          {filteredIgnoredWords.length === 0 && (
+                            <span className="text-xs text-slate-400 italic">No ignored words match your filter.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* TAB 1: SPL CC COMMENTS ARCHIVE & EXCEL EXPORT */}
                 {settingsActiveTab === 'splcc' && (

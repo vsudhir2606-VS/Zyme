@@ -38,7 +38,12 @@ import {
   Eye,
   UserCheck,
   Globe,
-  Loader2
+  Loader2,
+  CheckSquare,
+  Square,
+  Plus,
+  Undo2,
+  Filter
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
@@ -51,6 +56,17 @@ import {
   yieldToUi,
   StreamedDateCell,
 } from '../utils/fastSpreadsheetStream.ts';
+import {
+  MatchEngineConfig,
+  CaseMatchSummary,
+  DEFAULT_IGNORED_WORDS,
+  DEFAULT_MATCH_ENGINE_CONFIG,
+  MATCH_ENGINE_UPDATED_EVENT,
+  loadMatchEngineConfig,
+  saveMatchEngineConfig,
+  compileIgnoreLookup,
+  evaluateCaseMatches,
+} from '../utils/liveMatchEngine.ts';
 import { 
   saveSplCcComment, 
   getSavedSplCcComments, 
@@ -58,7 +74,7 @@ import {
   SavedSplCcComment 
 } from '../utils/splCcStorage.ts';
 
-export type LiveSortOption = 'original' | 'customer-asc' | 'customer-desc';
+export type LiveSortOption = 'original' | 'no-match-first' | 'customer-asc' | 'customer-desc';
 
 export type LiveUiPreset = 'modern' | 'compact' | 'focus' | 'auditor';
 
@@ -910,10 +926,135 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   // Review preferences & filter
   const [autoAdvance, setAutoAdvance] = useState(true);
-  const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'reviewed' | LiveActionType>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'reviewed' | 'no-match' | 'potential-match' | LiveActionType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [rplSearchQuery, setRplSearchQuery] = useState('');
   const [caseNote, setCaseNote] = useState('');
+
+  // Potential Match (>51%) & Ignored Words Engine Config (persisted in localStorage)
+  const [matchConfig, setMatchConfig] = useState<MatchEngineConfig>(() => loadMatchEngineConfig());
+  const [showMatchRulesModal, setShowMatchRulesModal] = useState(false);
+  const [newIgnoredWordInput, setNewIgnoredWordInput] = useState('');
+
+  // Bulk Selection & Bulk Decision states (Show List + Quick Bulk No-Match)
+  const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
+  const [lastBulkAnchorId, setLastBulkAnchorId] = useState<string | null>(null);
+  const [bulkActionChoice, setBulkActionChoice] = useState<LiveActionType | '__CLEAR__'>('SPLF');
+  const [bulkCommentText, setBulkCommentText] = useState('');
+  const [bulkSkipReviewed, setBulkSkipReviewed] = useState(true);
+  const [bulkNotice, setBulkNotice] = useState<{
+    message: string;
+    undoSnapshot?: {
+      caseId: string;
+      prevAction: LiveActionType | null;
+      prevNotes?: string;
+      prevTimestamp?: string;
+    }[];
+  } | null>(null);
+
+  const updateMatchConfig = (updater: (prev: MatchEngineConfig) => MatchEngineConfig) => {
+    setMatchConfig(prev => {
+      const next = updater(prev);
+      saveMatchEngineConfig(next);
+      return next;
+    });
+  };
+
+  // Keep Live Processing in sync if Potential Match % or Ignored Words are edited in Settings
+  useEffect(() => {
+    const syncConfig = () => {
+      setMatchConfig(loadMatchEngineConfig());
+    };
+    window.addEventListener(MATCH_ENGINE_UPDATED_EVENT, syncConfig);
+    window.addEventListener('storage', syncConfig);
+    return () => {
+      window.removeEventListener(MATCH_ENGINE_UPDATED_EVENT, syncConfig);
+      window.removeEventListener('storage', syncConfig);
+    };
+  }, []);
+
+  const handleAddIgnoredWords = () => {
+    const raw = newIgnoredWordInput.trim();
+    if (!raw) return;
+    const additions = raw
+      .split(/[,;\n]+/)
+      .map(w => w.trim())
+      .filter(Boolean);
+    if (additions.length === 0) return;
+
+    updateMatchConfig(prev => {
+      const existingLower = new Set(prev.ignoredWords.map(w => w.toLowerCase()));
+      const merged = [...prev.ignoredWords];
+      for (const word of additions) {
+        if (!existingLower.has(word.toLowerCase())) {
+          existingLower.add(word.toLowerCase());
+          merged.push(word);
+        }
+      }
+      return { ...prev, ignoredWords: merged };
+    });
+    setNewIgnoredWordInput('');
+  };
+
+  const handleRemoveIgnoredWord = (wordToRemove: string) => {
+    const lower = wordToRemove.toLowerCase();
+    updateMatchConfig(prev => ({
+      ...prev,
+      ignoredWords: prev.ignoredWords.filter(w => w.toLowerCase() !== lower),
+    }));
+  };
+
+  const handleResetMatchRules = () => {
+    updateMatchConfig(() => ({
+      ...DEFAULT_MATCH_ENGINE_CONFIG,
+      ignoredWords: [...DEFAULT_IGNORED_WORDS],
+    }));
+  };
+
+  // Extract unique city names from loaded dataset for automatic city-name exclusion
+  const datasetCities = useMemo(() => {
+    const set = new Set<string>();
+    for (let i = 0; i < cases.length; i++) {
+      const city = (cases[i].city || '').trim();
+      if (city) set.add(city);
+    }
+    return Array.from(set);
+  }, [cases]);
+
+  const compiledIgnoreLookup = useMemo(
+    () => compileIgnoreLookup(matchConfig, datasetCities),
+    [matchConfig, datasetCities]
+  );
+
+  // Evaluate Potential Match (>51%), Exact Match, No Match & Matching Keywords per case
+  const caseMatchMap = useMemo(() => {
+    const map = new Map<string, CaseMatchSummary>();
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      map.set(c.caseId, evaluateCaseMatches(c.customerName, c.city, c.rplEntries, compiledIgnoreLookup));
+    }
+    return map;
+  }, [cases, compiledIgnoreLookup]);
+
+  const matchStats = useMemo(() => {
+    let noMatchTotal = 0;
+    let noMatchPending = 0;
+    let potentialMatchTotal = 0;
+    let exactMatchTotal = 0;
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      const m = caseMatchMap.get(c.caseId);
+      if (!m) continue;
+      if (m.isNoMatch) {
+        noMatchTotal++;
+        if (c.action === null) noMatchPending++;
+      }
+      if (m.hasPotentialMatch) potentialMatchTotal++;
+      if (m.hasExactMatch) exactMatchTotal++;
+    }
+    return { noMatchTotal, noMatchPending, potentialMatchTotal, exactMatchTotal };
+  }, [cases, caseMatchMap]);
+
   const [savedCommentsList, setSavedCommentsList] = useState<SavedSplCcComment[]>(() => {
     try {
       return getSavedSplCcComments();
@@ -925,7 +1066,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Professional UI Presets
+  // Professional UI Presets (configured in Settings, synced live)
   const [uiPreset, setUiPreset] = useState<LiveUiPreset>(() => {
     try {
       return (localStorage.getItem('zyme_live_ui_preset') as LiveUiPreset) || 'modern';
@@ -939,10 +1080,53 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setUiPreset(preset);
     try {
       localStorage.setItem('zyme_live_ui_preset', preset);
+      window.dispatchEvent(new CustomEvent('zyme:live-ui-preset-updated', { detail: preset }));
     } catch {
       // no-op
     }
   };
+
+  useEffect(() => {
+    const syncPreset = () => {
+      try {
+        const stored = (localStorage.getItem('zyme_live_ui_preset') as LiveUiPreset) || 'modern';
+        setUiPreset(stored);
+      } catch {
+        // no-op
+      }
+    };
+    window.addEventListener('zyme:live-ui-preset-updated', syncPreset);
+    window.addEventListener('storage', syncPreset);
+    return () => {
+      window.removeEventListener('zyme:live-ui-preset-updated', syncPreset);
+      window.removeEventListener('storage', syncPreset);
+    };
+  }, []);
+
+  // Broadcast live match stats to Settings so Bulk No-Match count stays live
+  useEffect(() => {
+    const payload = {
+      totalCases: cases.length,
+      noMatchTotal: matchStats.noMatchTotal,
+      noMatchPending: matchStats.noMatchPending,
+      potentialMatchTotal: matchStats.potentialMatchTotal,
+      exactMatchTotal: matchStats.exactMatchTotal,
+    };
+    (window as any).__zymeLiveMatchStats = payload;
+    window.dispatchEvent(new CustomEvent('zyme:live-match-stats-updated', { detail: payload }));
+  }, [cases.length, matchStats]);
+
+  // Allow Settings modal to trigger Bulk No-Match selection directly
+  const bulkNoMatchTriggerRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onTriggerBulkNoMatch = () => {
+      bulkNoMatchTriggerRef.current();
+    };
+    window.addEventListener('zyme:trigger-bulk-no-match', onTriggerBulkNoMatch);
+    return () => {
+      window.removeEventListener('zyme:trigger-bulk-no-match', onTriggerBulkNoMatch);
+    };
+  }, []);
 
   // Selected RPL for SPL ID Inspection Modal (Double-click on RPL name)
   const [inspectingSplRpl, setInspectingSplRpl] = useState<{
@@ -1049,13 +1233,16 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     
     const streetAll = targetCase.streetAll || streetLines.map(l => l.value).join(', ') || targetCase.street || '';
 
+    const liveMatch = caseMatchMap.get(targetCase.caseId);
+    const resolvedMatch = liveMatch?.matchedKeywordsText || targetCase.matchingName || '';
+
     setInspectingCustomer({
       name: targetCase.customerName || '',
       posnr: targetCase.posnr || '',
       partnerId: targetCase.partnerId || '',
       streetAll,
       streetLines,
-      matchingName: targetCase.matchingName || '',
+      matchingName: resolvedMatch,
       city: targetCase.city || '',
       country: targetCase.country || '',
       state: targetCase.state || '',
@@ -1066,11 +1253,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setCopiedCustomerField(null);
   };
 
-  // Close Inspection Modals on Escape key
+  // Close Inspection / Rules Modals on Escape key
   useEffect(() => {
     const handleModalKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (inspectingCustomer) {
+        if (showMatchRulesModal) {
+          setShowMatchRulesModal(false);
+        } else if (inspectingCustomer) {
           setInspectingCustomer(null);
         } else if (inspectingSplRpl) {
           setInspectingSplRpl(null);
@@ -1079,7 +1268,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     };
     window.addEventListener('keydown', handleModalKeyDown);
     return () => window.removeEventListener('keydown', handleModalKeyDown);
-  }, [inspectingCustomer, inspectingSplRpl]);
+  }, [inspectingCustomer, inspectingSplRpl, showMatchRulesModal]);
 
   // Sync saved SPL CC list across events (saving in LiveProcessing or modifying in Settings)
   useEffect(() => {
@@ -1595,6 +1784,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     });
 
     setCases(builtCases);
+    setSelectedCaseIds(new Set());
+    setLastBulkAnchorId(null);
+    setBulkNotice(null);
     if (builtCases.length > 0) {
       setActiveCaseId(builtCases[0].caseId);
     } else {
@@ -1602,12 +1794,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   };
 
-  // Sorted cases according to sortOption (Original file order, Alphabetical A-Z, Alphabetical Z-A)
+  // Sorted cases according to sortOption (Original file order, No Match First, Alphabetical A-Z, Z-A)
   const sortedCases = useMemo(() => {
     if (sortOption === 'original') return cases;
 
     const list = [...cases];
-    if (sortOption === 'customer-asc') {
+    if (sortOption === 'no-match-first') {
+      const getMatchRank = (caseId: string): number => {
+        const m = caseMatchMap.get(caseId);
+        if (!m || m.isNoMatch) return 0; // No matching customers strictly first
+        if (m.hasExactMatch) return 3;
+        if (m.hasPotentialMatch) return 2;
+        return 1; // Low/partial match <= threshold
+      };
+      list.sort((a, b) => {
+        const rankA = getMatchRank(a.caseId);
+        const rankB = getMatchRank(b.caseId);
+        if (rankA !== rankB) return rankA - rankB;
+        const pctA = caseMatchMap.get(a.caseId)?.maxMatchPercent ?? 0;
+        const pctB = caseMatchMap.get(b.caseId)?.maxMatchPercent ?? 0;
+        if (pctA !== pctB) return pctA - pctB;
+        return a.caseNumber - b.caseNumber;
+      });
+    } else if (sortOption === 'customer-asc') {
       list.sort((a, b) => {
         const nameA = (a.customerName || '').trim();
         const nameB = (b.customerName || '').trim();
@@ -1631,14 +1840,23 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       });
     }
     return list;
-  }, [cases, sortOption]);
+  }, [cases, sortOption, caseMatchMap]);
 
   // Filtered cases for sidebar queue based on search & filter mode
   const filteredCases = useMemo(() => {
     return sortedCases.filter(c => {
+      const m = caseMatchMap.get(c.caseId);
       if (filterMode === 'pending' && c.action !== null) return false;
       if (filterMode === 'reviewed' && c.action === null) return false;
-      if (filterMode !== 'all' && filterMode !== 'pending' && filterMode !== 'reviewed') {
+      if (filterMode === 'no-match' && !(m?.isNoMatch ?? true)) return false;
+      if (filterMode === 'potential-match' && !(m?.hasPotentialMatch ?? false)) return false;
+      if (
+        filterMode !== 'all' &&
+        filterMode !== 'pending' &&
+        filterMode !== 'reviewed' &&
+        filterMode !== 'no-match' &&
+        filterMode !== 'potential-match'
+      ) {
         if (c.action !== filterMode) return false;
       }
 
@@ -1647,17 +1865,18 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         const posnrMatch = c.posnr.toLowerCase().includes(q);
         const nameMatch = c.customerName.toLowerCase().includes(q);
         const countryMatch = c.country.toLowerCase().includes(q);
+        const kwMatch = (m?.matchedKeywordsText || '').toLowerCase().includes(q);
         const rplMatch = c.rplEntries.some(r => 
           r.rplName.toLowerCase().includes(q) || 
           r.match.toLowerCase().includes(q) ||
           r.typeOfList.toLowerCase().includes(q)
         );
-        if (!posnrMatch && !nameMatch && !countryMatch && !rplMatch) return false;
+        if (!posnrMatch && !nameMatch && !countryMatch && !kwMatch && !rplMatch) return false;
       }
 
       return true;
     });
-  }, [sortedCases, filterMode, searchQuery]);
+  }, [sortedCases, filterMode, searchQuery, caseMatchMap]);
 
   // Active case resolution
   const activeCase: LiveProcessingCase | undefined = useMemo(() => {
@@ -2015,9 +2234,196 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     } : c));
   };
 
+  // Bulk selection & bulk decision handlers
+  const handleToggleCaseSelection = (caseId: string, shiftKey: boolean) => {
+    setSelectedCaseIds(prev => {
+      const next = new Set(prev);
+      if (shiftKey && lastBulkAnchorId) {
+        const idxA = filteredCases.findIndex(c => c.caseId === lastBulkAnchorId);
+        const idxB = filteredCases.findIndex(c => c.caseId === caseId);
+        if (idxA !== -1 && idxB !== -1) {
+          const start = Math.min(idxA, idxB);
+          const end = Math.max(idxA, idxB);
+          const shouldSelect = !prev.has(caseId);
+          for (let i = start; i <= end; i++) {
+            if (shouldSelect) {
+              next.add(filteredCases[i].caseId);
+            } else {
+              next.delete(filteredCases[i].caseId);
+            }
+          }
+          return next;
+        }
+      }
+      if (next.has(caseId)) {
+        next.delete(caseId);
+      } else {
+        next.add(caseId);
+      }
+      return next;
+    });
+    setLastBulkAnchorId(caseId);
+  };
+
+  const handleSelectCasesPreset = (preset: 'no-match' | 'no-match-pending' | 'filtered' | 'filtered-pending' | 'potential' | 'clear') => {
+    if (preset === 'clear') {
+      setSelectedCaseIds(new Set());
+      setLastBulkAnchorId(null);
+      return;
+    }
+    const next = new Set<string>();
+    if (preset === 'no-match' || preset === 'no-match-pending') {
+      for (let i = 0; i < cases.length; i++) {
+        const c = cases[i];
+        const m = caseMatchMap.get(c.caseId);
+        if (m?.isNoMatch) {
+          if (preset === 'no-match-pending' && c.action !== null) continue;
+          next.add(c.caseId);
+        }
+      }
+    } else if (preset === 'potential') {
+      for (let i = 0; i < cases.length; i++) {
+        const c = cases[i];
+        if (caseMatchMap.get(c.caseId)?.hasPotentialMatch) {
+          next.add(c.caseId);
+        }
+      }
+    } else if (preset === 'filtered' || preset === 'filtered-pending') {
+      for (let i = 0; i < filteredCases.length; i++) {
+        const c = filteredCases[i];
+        if (preset === 'filtered-pending' && c.action !== null) continue;
+        next.add(c.caseId);
+      }
+    }
+    setSelectedCaseIds(next);
+  };
+
+  const handleQuickOpenBulkNoMatch = () => {
+    setIsSidebarOpen(true);
+    setSortOption('no-match-first');
+    setFilterMode('no-match');
+    setBulkSkipReviewed(true);
+    const pendingNoMatchIds = new Set<string>();
+    const allNoMatchIds = new Set<string>();
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      if (caseMatchMap.get(c.caseId)?.isNoMatch) {
+        allNoMatchIds.add(c.caseId);
+        if (c.action === null) pendingNoMatchIds.add(c.caseId);
+      }
+    }
+    setSelectedCaseIds(pendingNoMatchIds.size > 0 ? pendingNoMatchIds : allNoMatchIds);
+    if (pendingNoMatchIds.size === 0 && allNoMatchIds.size > 0) {
+      setBulkSkipReviewed(false);
+    }
+  };
+  bulkNoMatchTriggerRef.current = handleQuickOpenBulkNoMatch;
+
+  const bulkTargetCount = useMemo(() => {
+    if (selectedCaseIds.size === 0) return 0;
+    if (!bulkSkipReviewed || bulkActionChoice === '__CLEAR__') return selectedCaseIds.size;
+    let count = 0;
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      if (selectedCaseIds.has(c.caseId) && c.action === null) count++;
+    }
+    return count;
+  }, [cases, selectedCaseIds, bulkSkipReviewed, bulkActionChoice]);
+
+  const handleApplyBulkAction = () => {
+    if (selectedCaseIds.size === 0) return;
+    const isClear = bulkActionChoice === '__CLEAR__';
+    const noteTrimmed = bulkCommentText.trim();
+    const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const undoSnapshot: {
+      caseId: string;
+      prevAction: LiveActionType | null;
+      prevNotes?: string;
+      prevTimestamp?: string;
+    }[] = [];
+
+    setCases(prev =>
+      prev.map(c => {
+        if (!selectedCaseIds.has(c.caseId)) return c;
+        if (!isClear && bulkSkipReviewed && c.action !== null) return c;
+
+        undoSnapshot.push({
+          caseId: c.caseId,
+          prevAction: c.action,
+          prevNotes: c.notes,
+          prevTimestamp: c.actionTimestamp,
+        });
+
+        if (isClear) {
+          return {
+            ...c,
+            action: null,
+            actionTimestamp: undefined,
+          };
+        }
+
+        return {
+          ...c,
+          action: bulkActionChoice,
+          actionTimestamp: nowTime,
+          notes: noteTrimmed ? noteTrimmed : c.notes,
+        };
+      })
+    );
+
+    if (undoSnapshot.length === 0) {
+      setBulkNotice({
+        message: 'All selected cases already have a decision. Uncheck "Only pending" to overwrite.',
+      });
+      return;
+    }
+
+    setBulkNotice({
+      message: isClear
+        ? `Cleared decisions on ${undoSnapshot.length.toLocaleString()} cases.`
+        : `Applied "${bulkActionChoice}" to ${undoSnapshot.length.toLocaleString()} cases.`,
+      undoSnapshot,
+    });
+    setSelectedCaseIds(new Set());
+    setBulkCommentText('');
+  };
+
+  const handleUndoBulkAction = () => {
+    if (!bulkNotice?.undoSnapshot || bulkNotice.undoSnapshot.length === 0) return;
+    const snapMap = new Map<
+      string,
+      {
+        caseId: string;
+        prevAction: LiveActionType | null;
+        prevNotes?: string;
+        prevTimestamp?: string;
+      }
+    >();
+    for (const s of bulkNotice.undoSnapshot) {
+      snapMap.set(s.caseId, s);
+    }
+    setCases(prev =>
+      prev.map(c => {
+        const snap = snapMap.get(c.caseId);
+        if (!snap) return c;
+        return {
+          ...c,
+          action: snap.prevAction,
+          notes: snap.prevNotes,
+          actionTimestamp: snap.prevTimestamp,
+        };
+      })
+    );
+    setBulkNotice(null);
+  };
+
   // Keyboard shortcut listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (showMatchRulesModal || showUiPresetModal || inspectingCustomer || inspectingSplRpl) {
+        return;
+      }
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
         return;
       }
@@ -2045,7 +2451,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeCase, navigationList, currentNavIndex, canPrev, canNext, autoAdvance, caseNote]);
+  }, [activeCase, navigationList, currentNavIndex, canPrev, canNext, autoAdvance, caseNote, showMatchRulesModal, showUiPresetModal, inspectingCustomer, inspectingSplRpl]);
 
   // Sync current case note
   useEffect(() => {
@@ -2251,6 +2657,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setCases([]);
     setActiveCaseId(null);
     setSortOption('original');
+    setFilterMode('all');
+    setSelectedCaseIds(new Set());
+    setLastBulkAnchorId(null);
+    setBulkNotice(null);
     setError(null);
     setDownloadError(null);
     if (fileInputRef.current) {
@@ -2396,49 +2806,24 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         setSortOption(e.target.value as LiveSortOption);
                       }}
                       className="bg-transparent text-[10px] font-semibold text-slate-700 focus:outline-none cursor-pointer pr-0.5 py-0"
-                      title="Sort orders list by customer name"
+                      title="Sort orders list"
                     >
                       <option value="original">File Order</option>
+                      <option value="no-match-first">No Match First</option>
                       <option value="customer-asc">Name (A → Z)</option>
                       <option value="customer-desc">Name (Z → A)</option>
                     </select>
                     {sortOption !== 'original' && (
                       <span className="px-1 py-0 rounded text-[8px] font-black uppercase bg-indigo-600 text-white leading-tight">
-                        {sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
+                        {sortOption === 'no-match-first' ? 'NO MATCH' : sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
                       </span>
                     )}
                   </div>
                 </div>
 
-                {/* Right: Prev / Next Navigation & UI Preset & Download & Settings */}
+                {/* Right: Prev/Next Navigation & Download & Settings */}
                 <div className="flex items-center gap-2 flex-wrap">
                   
-                  {/* UI Style Selector Trigger */}
-                  <button
-                    type="button"
-                    onClick={() => setShowUiPresetModal(true)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold shadow-2xs transition-all cursor-pointer ${
-                      uiPreset === 'focus'
-                        ? 'bg-slate-900 text-amber-300 border-slate-700 hover:bg-slate-800'
-                        : uiPreset === 'compact'
-                        ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
-                        : uiPreset === 'auditor'
-                        ? 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100'
-                        : 'bg-white hover:bg-indigo-50/50 text-indigo-900 border-indigo-200'
-                    }`}
-                    title="Click to view & select professional UI layouts (Modern, High-Density, Command Center, Auditor Matrix)"
-                  >
-                    <Layout size={13} className={uiPreset === 'focus' ? 'text-amber-400' : 'text-indigo-600'} />
-                    <span className="hidden sm:inline text-slate-500 font-medium">UI:</span>
-                    <span className="font-bold">
-                      {uiPreset === 'modern' && 'Modern'}
-                      {uiPreset === 'compact' && 'High-Density'}
-                      {uiPreset === 'focus' && 'Focus'}
-                      {uiPreset === 'auditor' && 'Auditor'}
-                    </span>
-                    <SlidersHorizontal size={11} className="opacity-60 ml-0.5" />
-                  </button>
-
                   {/* Prev / Next Buttons */}
                   <div className="flex items-center rounded-lg border border-slate-300 bg-white shadow-2xs overflow-hidden">
                     <button
@@ -2512,10 +2897,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                   {onOpenSettings && (
                     <button
                       onClick={onOpenSettings}
-                      className="p-1.5 bg-white hover:bg-slate-100 text-slate-500 hover:text-indigo-600 border border-slate-300 rounded-lg shadow-2xs transition-colors"
-                      title="Settings & Password Lock"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 hover:text-indigo-600 border border-slate-300 rounded-lg text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+                      title="Settings: Potential Match %, Match Rules, UI Style, Bulk No-Match & Password Lock"
                     >
                       <Settings size={14} />
+                      <span className="hidden sm:inline">Settings</span>
                     </button>
                   )}
                 </div>
@@ -2539,31 +2925,70 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                 </div>
               )}
 
+              {bulkNotice && (
+                <div className="px-5 py-2 bg-emerald-50 border-b border-emerald-200 text-xs text-emerald-900 flex items-center justify-between gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Check size={14} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
+                    <span className="font-semibold">{bulkNotice.message}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {bulkNotice.undoSnapshot && bulkNotice.undoSnapshot.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleUndoBulkAction}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold cursor-pointer transition-colors"
+                      >
+                        <Undo2 size={11} />
+                        <span>Undo</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setBulkNotice(null)}
+                      className="p-0.5 text-emerald-600 hover:text-emerald-900 cursor-pointer"
+                      title="Dismiss"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* DUAL WORKSPACE: COLLAPSIBLE LEFT DRAWER + MAIN SCREEN */}
               <div className="flex flex-1 min-h-0 relative overflow-hidden">
                 
-                {/* COLLAPSIBLE LEFT DRAWER: CASES QUEUE LIST */}
+                {/* COLLAPSIBLE LEFT DRAWER: CASES QUEUE LIST (SHOW LIST + MATCHING KEYWORDS + BULK ACTIONS) */}
                 {isSidebarOpen && (
-                  <div className="w-72 sm:w-80 border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 h-full overflow-hidden transition-all duration-200">
+                  <div className="w-80 sm:w-[350px] border-r border-slate-200 bg-slate-50/50 flex flex-col flex-shrink-0 h-full overflow-hidden transition-all duration-200">
                     
                     {/* Search & Sort & Filter Header */}
-                    <div className="p-2.5 border-b border-slate-200 space-y-2.5 bg-white flex-shrink-0">
+                    <div className="p-2.5 border-b border-slate-200 space-y-2 bg-white flex-shrink-0">
                       
                       {/* Search Input */}
                       <div className="relative">
                         <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 w-3.5 h-3.5" />
                         <input
                           type="text"
-                          placeholder="Search Posnr or Name..."
+                          placeholder="Search Posnr, Name, Keywords..."
                           value={searchQuery}
                           onChange={(e) => setSearchQuery(e.target.value)}
-                          className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
+                          className="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
                         />
+                        {searchQuery && (
+                          <button
+                            type="button"
+                            onClick={() => setSearchQuery('')}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                            title="Clear search"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
                       </div>
 
-                      {/* Smaller Sort Orders Row */}
+                      {/* Sort Orders Row (File, No Match First, A-Z, Z-A) */}
                       <div className="flex items-center justify-between gap-1 px-1.5 py-0.5 bg-slate-50 rounded border border-slate-200/80">
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-0.5">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-0.5 flex-shrink-0">
                           <ArrowDownAZ size={10} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
                           Sort:
                         </span>
@@ -2573,7 +2998,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               resetScrollToTop();
                               setSortOption('original');
                             }}
-                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'original'
                                 ? 'bg-white text-slate-900 shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -2585,9 +3010,23 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           <button
                             onClick={() => {
                               resetScrollToTop();
+                              setSortOption('no-match-first');
+                            }}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
+                              sortOption === 'no-match-first'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                            title="Sort all No Matching customers first"
+                          >
+                            No Match
+                          </button>
+                          <button
+                            onClick={() => {
+                              resetScrollToTop();
                               setSortOption('customer-asc');
                             }}
-                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'customer-asc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -2601,7 +3040,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               resetScrollToTop();
                               setSortOption('customer-desc');
                             }}
-                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight ${
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'customer-desc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
                                 : 'text-slate-600 hover:text-slate-900'
@@ -2613,39 +3052,161 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         </div>
                       </div>
 
-                      {/* Filter Mode Tabs */}
-                      <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
-                        <button
-                          onClick={() => setFilterMode('all')}
-                          className={`flex-1 py-1 text-[11px] font-semibold rounded-md transition-colors tabular-nums ${
-                            filterMode === 'all' 
-                              ? 'bg-white text-slate-900 shadow-2xs' 
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          All ({cases.length})
-                        </button>
-                        <button
-                          onClick={() => setFilterMode('pending')}
-                          className={`flex-1 py-1 text-[11px] font-semibold rounded-md transition-colors tabular-nums ${
-                            filterMode === 'pending' 
-                              ? 'bg-white text-slate-900 shadow-2xs' 
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          Pending ({stats.pending})
-                        </button>
-                        <button
-                          onClick={() => setFilterMode('reviewed')}
-                          className={`flex-1 py-1 text-[11px] font-semibold rounded-md transition-colors tabular-nums ${
-                            filterMode === 'reviewed' 
-                              ? 'bg-white text-slate-900 shadow-2xs' 
-                              : 'text-slate-600 hover:text-slate-900'
-                          }`}
-                        >
-                          Done ({stats.reviewed})
-                        </button>
+                      {/* Filter Mode Tabs (Row 1: Status, Row 2: Match Category) */}
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
+                          <button
+                            onClick={() => setFilterMode('all')}
+                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                              filterMode === 'all' 
+                                ? 'bg-white text-slate-900 shadow-2xs' 
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            All ({cases.length})
+                          </button>
+                          <button
+                            onClick={() => setFilterMode('pending')}
+                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                              filterMode === 'pending' 
+                                ? 'bg-white text-slate-900 shadow-2xs' 
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Pending ({stats.pending})
+                          </button>
+                          <button
+                            onClick={() => setFilterMode('reviewed')}
+                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                              filterMode === 'reviewed' 
+                                ? 'bg-white text-slate-900 shadow-2xs' 
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            Done ({stats.reviewed})
+                          </button>
+                        </div>
+
+                        <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
+                          <button
+                            onClick={() => setFilterMode('no-match')}
+                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                              filterMode === 'no-match'
+                                ? 'bg-emerald-600 text-white shadow-2xs'
+                                : 'text-emerald-800 hover:bg-emerald-50'
+                            }`}
+                            title="Show only customers with no matching RPL keywords"
+                          >
+                            No Match ({matchStats.noMatchTotal})
+                          </button>
+                          <button
+                            onClick={() => setFilterMode('potential-match')}
+                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                              filterMode === 'potential-match'
+                                ? 'bg-amber-500 text-white shadow-2xs'
+                                : 'text-amber-900 hover:bg-amber-50'
+                            }`}
+                            title={`Show only Potential Match cases (>${matchConfig.potentialMatchThreshold}%)`}
+                          >
+                            Potential &gt;{matchConfig.potentialMatchThreshold}% ({matchStats.potentialMatchTotal})
+                          </button>
+                        </div>
                       </div>
+
+                      {/* Quick Bulk Select Toolbar */}
+                      <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                          Bulk Select:
+                        </span>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleSelectCasesPreset('no-match-pending')}
+                            disabled={matchStats.noMatchTotal === 0}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
+                            title="Select all pending No-Match cases for bulk action"
+                          >
+                            No Match ({matchStats.noMatchPending > 0 ? matchStats.noMatchPending : matchStats.noMatchTotal})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSelectCasesPreset('filtered')}
+                            disabled={filteredCases.length === 0}
+                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
+                            title="Select all cases currently shown by your filter/search"
+                          >
+                            All Shown ({filteredCases.length})
+                          </button>
+                          {selectedCaseIds.size > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCasesPreset('clear')}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Bulk Decision Execution Bar (visible whenever 1+ cases are selected) */}
+                      {selectedCaseIds.size > 0 && (
+                        <div className="p-2 rounded-xl bg-indigo-50/90 border border-indigo-200 space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-bold text-indigo-950 tabular-nums">
+                              {selectedCaseIds.size.toLocaleString()} selected
+                              {bulkSkipReviewed && bulkActionChoice !== '__CLEAR__' && bulkTargetCount !== selectedCaseIds.size && (
+                                <span className="text-[10px] font-semibold text-indigo-700 ml-1">
+                                  ({bulkTargetCount.toLocaleString()} pending)
+                                </span>
+                              )}
+                            </span>
+                            <label className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-900 cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={bulkSkipReviewed}
+                                onChange={(e) => setBulkSkipReviewed(e.target.checked)}
+                                className="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500 w-3 h-3"
+                              />
+                              <span>Only pending</span>
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={bulkActionChoice}
+                              onChange={(e) => setBulkActionChoice(e.target.value as LiveActionType | '__CLEAR__')}
+                              className="flex-1 min-w-0 px-2 py-1 text-[11px] font-bold bg-white border border-indigo-300 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                            >
+                              {ACTION_BUTTON_CONFIG.map(act => (
+                                <option key={act.key} value={act.key}>
+                                  {act.label}
+                                </option>
+                              ))}
+                              <option value="__CLEAR__">Clear Decision</option>
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={handleApplyBulkAction}
+                              disabled={bulkTargetCount === 0}
+                              className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white text-[11px] font-bold shadow-2xs transition-colors cursor-pointer flex-shrink-0 tabular-nums"
+                            >
+                              Apply ({bulkTargetCount})
+                            </button>
+                          </div>
+
+                          {bulkActionChoice !== '__CLEAR__' && (
+                            <input
+                              type="text"
+                              value={bulkCommentText}
+                              onChange={(e) => setBulkCommentText(e.target.value)}
+                              placeholder="Optional bulk comment for selected cases..."
+                              className="w-full px-2 py-1 text-[11px] bg-white border border-indigo-200 rounded-md text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Scrollable Cases List */}
@@ -2658,7 +3219,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         <>
                           {visibleSidebarCases.map((c) => {
                             const isSelected = c.caseId === activeCase?.caseId;
+                            const isChecked = selectedCaseIds.has(c.caseId);
                             const meta = caseAlertMeta.get(c.caseId);
+                            const matchInfo = caseMatchMap.get(c.caseId);
                             const isRedItem = meta?.isRed ?? false;
                             const isOrangeItem = meta?.isOrange ?? false;
                             const isBlueNoAddItem = meta?.isBlueNoAdd ?? false;
@@ -2667,84 +3230,138 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                               <div
                                 key={c.caseId}
                                 onClick={() => setActiveCaseId(c.caseId)}
-                                className={`p-2.5 cursor-pointer transition-all border-l-4 ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
+                                className={`p-2.5 cursor-pointer transition-all border-l-4 ${
+                                  isChecked ? 'ring-1 ring-inset ring-indigo-300' : ''
+                                } ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
                               >
-                                <div className="flex items-center justify-between gap-1 mb-0.5">
-                                  <span className={`font-mono text-[11px] font-bold px-1.5 py-0.2 rounded tabular-nums ${
-                                    isRedItem
-                                      ? 'text-red-700 bg-red-100'
-                                      : isOrangeItem
-                                      ? 'text-orange-800 bg-orange-100'
-                                      : isBlueNoAddItem
-                                      ? 'text-blue-700 bg-blue-100'
-                                      : 'text-indigo-700 bg-indigo-100/60'
-                                  }`}>
-                                    #{c.posnr}
-                                  </span>
-
-                                  <div className="flex items-center gap-1">
-                                    {isRedItem && (
-                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
-                                        {meta?.redLabel}
-                                      </span>
-                                    )}
-                                    {isOrangeItem && (
-                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
-                                        {meta?.orangeLabel}
-                                      </span>
-                                    )}
-                                    {isBlueNoAddItem && (
-                                      <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-blue-600 text-white">
-                                        NO add
-                                      </span>
-                                    )}
-                                    {c.action ? (
-                                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
-                                        ACTION_BUTTON_CONFIG.find(a => a.key === c.action)?.colorTheme.badge || 'bg-slate-100'
-                                      }`}>
-                                        {c.action}
-                                      </span>
+                                <div className="flex items-start gap-2">
+                                  {/* Bulk Selection Checkbox (supports Shift+Click range select) */}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleToggleCaseSelection(c.caseId, e.shiftKey);
+                                    }}
+                                    className="mt-0.5 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer flex-shrink-0"
+                                    title="Select for bulk decision (Shift+Click to select range)"
+                                    aria-label={`Select case ${c.posnr} for bulk decision`}
+                                  >
+                                    {isChecked ? (
+                                      <CheckSquare size={15} className="text-indigo-600" />
                                     ) : (
-                                      <span className="text-[9px] text-slate-400 font-medium">
-                                        Pending
-                                      </span>
+                                      <Square size={15} />
                                     )}
-                                  </div>
-                                </div>
+                                  </button>
 
-                                <p 
-                                  onDoubleClick={(e) => {
-                                    e.stopPropagation();
-                                    handleCustomerDoubleClick(c);
-                                  }}
-                                  title="Double-click to view complete Customer Details (Name, Street all data, City & Country)"
-                                  className={`text-xs font-semibold line-clamp-1 cursor-pointer hover:underline transition-colors ${
-                                  isRedItem
-                                    ? 'text-red-950 font-bold'
-                                    : isOrangeItem
-                                    ? 'text-orange-950 font-bold'
-                                    : isBlueNoAddItem
-                                    ? 'text-blue-950 font-bold'
-                                    : 'text-slate-800'
-                                }`}>
-                                  {c.customerName || <span className="italic text-slate-400 font-normal">[No Customer Name]</span>}
-                                </p>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center justify-between gap-1 mb-0.5">
+                                      <span className={`font-mono text-[11px] font-bold px-1.5 py-0.2 rounded tabular-nums ${
+                                        isRedItem
+                                          ? 'text-red-700 bg-red-100'
+                                          : isOrangeItem
+                                          ? 'text-orange-800 bg-orange-100'
+                                          : isBlueNoAddItem
+                                          ? 'text-blue-700 bg-blue-100'
+                                          : 'text-indigo-700 bg-indigo-100/60'
+                                      }`}>
+                                        #{c.posnr}
+                                      </span>
 
-                                <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5 tabular-nums">
-                                  <span>{c.rplEntries.length} RPL {c.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
-                                  {c.status && (
-                                    <span className={`font-semibold truncate max-w-[95px] ${
+                                      <div className="flex items-center gap-1 flex-wrap justify-end">
+                                        {isRedItem && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
+                                            {meta?.redLabel}
+                                          </span>
+                                        )}
+                                        {isOrangeItem && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
+                                            {meta?.orangeLabel}
+                                          </span>
+                                        )}
+                                        {isBlueNoAddItem && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-blue-600 text-white">
+                                            NO add
+                                          </span>
+                                        )}
+                                        {c.action ? (
+                                          <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold border ${
+                                            ACTION_BUTTON_CONFIG.find(a => a.key === c.action)?.colorTheme.badge || 'bg-slate-100'
+                                          }`}>
+                                            {c.action}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] text-slate-400 font-medium">
+                                            Pending
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <p 
+                                      onDoubleClick={(e) => {
+                                        e.stopPropagation();
+                                        handleCustomerDoubleClick(c);
+                                      }}
+                                      title="Double-click to view complete Customer Details (Name, Street all data, City & Country)"
+                                      className={`text-xs font-semibold line-clamp-1 cursor-pointer hover:underline transition-colors ${
                                       isRedItem
-                                        ? 'text-red-700 font-bold'
+                                        ? 'text-red-950 font-bold'
+                                        : isOrangeItem
+                                        ? 'text-orange-950 font-bold'
                                         : isBlueNoAddItem
-                                        ? 'text-blue-700 font-bold'
-                                        : c.status.toLowerCase().includes('risk')
-                                        ? 'text-rose-600'
-                                        : 'text-slate-600'
+                                        ? 'text-blue-950 font-bold'
+                                        : 'text-slate-800'
                                     }`}>
-                                      {c.status}
-                                    </span>
-                                  )}
+                                      {c.customerName || <span className="italic text-slate-400 font-normal">[No Customer Name]</span>}
+                                    </p>
+
+                                    {/* Matching Keywords & Potential Match Status inside Show List */}
+                                    <div className="mt-1 flex items-center gap-1 flex-wrap">
+                                      {matchInfo?.hasExactMatch ? (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-red-100 text-red-700 border border-red-200">
+                                          Exact Match
+                                        </span>
+                                      ) : matchInfo?.hasPotentialMatch ? (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-300 tabular-nums">
+                                          Potential {matchInfo.maxMatchPercent}%
+                                        </span>
+                                      ) : matchInfo?.isNoMatch ? (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                          No Match
+                                        </span>
+                                      ) : (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 tabular-nums">
+                                          {matchInfo?.maxMatchPercent ?? 0}%
+                                        </span>
+                                      )}
+
+                                      {matchInfo && matchInfo.matchedKeywords.length > 0 && (
+                                        <span
+                                          className="text-[10px] font-semibold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-1.5 py-0.2 rounded truncate max-w-[180px]"
+                                          title={`Matching keywords: ${matchInfo.matchedKeywords.join(', ')}`}
+                                        >
+                                          {matchInfo.matchedKeywords.join(', ')}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5 tabular-nums">
+                                      <span>{c.rplEntries.length} RPL {c.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
+                                      {c.status && (
+                                        <span className={`font-semibold truncate max-w-[110px] ${
+                                          isRedItem
+                                            ? 'text-red-700 font-bold'
+                                            : isBlueNoAddItem
+                                            ? 'text-blue-700 font-bold'
+                                            : c.status.toLowerCase().includes('risk')
+                                            ? 'text-rose-600'
+                                            : 'text-slate-600'
+                                        }`}>
+                                          {c.status}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -2830,6 +3447,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             activeCase.status,
                             activeCase.isNoAdd
                           );
+                          const activeMatchSummary = caseMatchMap.get(activeCase.caseId);
 
                           return (
                             <div className={`lg:col-span-5 flex flex-col justify-between transition-all ${
@@ -2837,14 +3455,21 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             } ${boxTheme.containerClass}`}>
                               <div className="space-y-3.5">
                                 
-                                {/* Header bar with Posnr & Alert/Country badges */}
+                                {/* Header bar with Posnr & Alert/Potential Match/Country badges */}
                                 <div className="flex items-center justify-between gap-2 flex-wrap">
                                   <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-white text-xs font-black shadow-2xs font-mono tabular-nums ${boxTheme.posnrClass}`}>
                                     <span>POSNR:</span>
                                     <span>{activeCase.posnr}</span>
                                   </div>
 
-                                  <div className="flex items-center gap-1.5">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {activeMatchSummary?.hasPotentialMatch && !activeMatchSummary.hasExactMatch && (
+                                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wide bg-amber-500 text-white shadow-2xs tabular-nums">
+                                        <AlertCircle size={11} className="text-white" />
+                                        Potential Match ({activeMatchSummary.maxMatchPercent}%)
+                                      </span>
+                                    )}
+
                                     {boxTheme.badge && (
                                       <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wide ${boxTheme.badge.className}`}>
                                         {boxTheme.badge.isAlert ? (
@@ -2945,16 +3570,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   )}
                                   <div className="text-xs flex items-start gap-1.5 flex-wrap pt-0.5">
                                     <span className={`${boxTheme.subLabelClass} flex-shrink-0`}>Matching Name:</span>
-                                    {activeCase.matchingName ? (
-                                      <span className={`font-semibold break-words select-text ${
-                                        activeCase.matchingName.toLowerCase().includes('exact match')
-                                          ? 'text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200 font-bold'
-                                          : 'text-indigo-800 bg-indigo-50/90 px-1.5 py-0.5 rounded border border-indigo-200'
-                                      }`}>
-                                        {activeCase.matchingName}
+                                    {activeMatchSummary?.hasExactMatch ? (
+                                      <span className="font-bold break-words select-text text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200">
+                                        Exact match
                                       </span>
+                                    ) : activeMatchSummary && activeMatchSummary.matchedKeywords.length > 0 ? (
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className={`font-semibold break-words select-text px-1.5 py-0.5 rounded border ${
+                                          activeMatchSummary.hasPotentialMatch
+                                            ? 'text-amber-950 bg-amber-100/90 border-amber-300 font-bold'
+                                            : 'text-indigo-800 bg-indigo-50/90 border-indigo-200'
+                                        }`}>
+                                          {activeMatchSummary.matchedKeywords.join(', ')}
+                                        </span>
+                                        {activeMatchSummary.hasPotentialMatch && (
+                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white tabular-nums">
+                                            Potential Match • {activeMatchSummary.maxMatchPercent}%
+                                          </span>
+                                        )}
+                                      </div>
                                     ) : (
-                                      <span className="italic text-slate-400">None</span>
+                                      <span className="font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                        No Match
+                                      </span>
                                     )}
                                   </div>
                                 </div>
@@ -3071,6 +3709,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   {exactMatchCount} exact {exactMatchCount === 1 ? 'match' : 'matches'}
                                 </span>
                               )}
+                              {(caseMatchMap.get(activeCase.caseId)?.potentialMatchCount ?? 0) > 0 && (
+                                <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 tabular-nums">
+                                  {caseMatchMap.get(activeCase.caseId)?.potentialMatchCount} potential (&gt;{matchConfig.potentialMatchThreshold}%)
+                                </span>
+                              )}
                             </div>
 
                             {/* Search bar next to RPLname in tool */}
@@ -3135,6 +3778,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             ) : (
                               displayedRplEntries.map((rpl, idx) => {
                                 const isExact = isExact100Match(activeCase.customerName, rpl.rplName);
+                                const rplEval = caseMatchMap.get(activeCase.caseId)?.rplResultsByRow.get(rpl.rowIndex);
+                                const isPotential = !isExact && Boolean(rplEval?.isPotentialMatch);
                                 return (
                                   <div 
                                     key={idx}
@@ -3144,15 +3789,19 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                     } ${
                                       isExact 
                                         ? 'border-2 border-red-500 bg-red-500/10 text-red-600 dark:text-red-300 font-bold shadow-2xs ring-2 ring-red-400/50' 
-                                        : uiPreset === 'focus'
-                                          ? 'border-slate-800 bg-slate-800/80 hover:bg-slate-800 hover:border-slate-600 text-slate-100 font-medium'
-                                          : uiPreset === 'auditor'
-                                            ? 'border-slate-300 bg-slate-50/80 hover:bg-white hover:border-indigo-400 text-slate-900 font-medium'
-                                            : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
+                                        : isPotential
+                                          ? uiPreset === 'focus'
+                                            ? 'border-2 border-amber-500 bg-amber-950/50 text-amber-100 font-bold shadow-2xs ring-1 ring-amber-400/40'
+                                            : 'border-2 border-amber-400 bg-amber-50/90 text-amber-950 font-bold shadow-2xs ring-1 ring-amber-300/60'
+                                          : uiPreset === 'focus'
+                                            ? 'border-slate-800 bg-slate-800/80 hover:bg-slate-800 hover:border-slate-600 text-slate-100 font-medium'
+                                            : uiPreset === 'auditor'
+                                              ? 'border-slate-300 bg-slate-50/80 hover:bg-white hover:border-indigo-400 text-slate-900 font-medium'
+                                              : 'border-slate-200 bg-slate-50/60 hover:bg-indigo-50/30 hover:border-indigo-300 text-slate-900 font-medium'
                                     }`}
                                     title="Double-click RPL name to view SPL ID from Excel sheet"
                                   >
-                                    <div className="flex-1 min-w-[180px] flex items-center gap-2">
+                                    <div className="flex-1 min-w-[180px] flex items-center gap-2 flex-wrap">
                                       <span 
                                         onDoubleClick={(e) => {
                                           e.stopPropagation();
@@ -3196,13 +3845,26 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                       )}
                                     </div>
 
-                                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                                      {isExact && (
+                                    <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap">
+                                      {isExact ? (
                                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-red-600 text-white shadow-xs flex-shrink-0 animate-pulse">
                                           <AlertCircle size={11} className="text-white" />
                                           Exact match found
                                         </span>
-                                      )}
+                                      ) : isPotential ? (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-500 text-white shadow-xs flex-shrink-0 tabular-nums">
+                                          <AlertCircle size={11} className="text-white" />
+                                          Potential match • {rplEval?.matchPercent}%
+                                        </span>
+                                      ) : rplEval && rplEval.matchPercent > 0 ? (
+                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tabular-nums border ${
+                                          uiPreset === 'focus'
+                                            ? 'bg-slate-700/80 text-slate-300 border-slate-600'
+                                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                                        }`}>
+                                          {rplEval.matchPercent}%
+                                        </span>
+                                      ) : null}
                                     </div>
                                   </div>
                                 );
@@ -4172,6 +4834,264 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
               <button
                 type="button"
                 onClick={() => setShowUiPresetModal(false)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-2xs"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MATCH RULES & IGNORED WORDS MODAL (Potential Match >51%, Avoid City Names, Add/Remove Ignored Words) */}
+      {showMatchRulesModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => setShowMatchRulesModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-2xl w-full overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-amber-50 via-orange-50/60 to-slate-50 flex-shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shadow-sm">
+                  <Filter size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 tracking-tight">
+                    Potential Match &amp; Ignored Words
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Customize threshold (&gt;51%), city-name filtering, and generic words excluded from RPL matching.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMatchRulesModal(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                title="Close (Esc)"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 overflow-y-auto space-y-5 scrollbar-thin">
+              {/* Live Summary Counters */}
+              <div className="grid grid-cols-3 gap-2.5 text-center">
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">
+                    No Match Cases
+                  </span>
+                  <span className="text-lg font-black text-emerald-900 tabular-nums">
+                    {matchStats.noMatchTotal.toLocaleString()}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+                    Potential (&gt;{matchConfig.potentialMatchThreshold}%)
+                  </span>
+                  <span className="text-lg font-black text-amber-950 tabular-nums">
+                    {matchStats.potentialMatchTotal.toLocaleString()}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-xl bg-red-50 border border-red-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-red-700 block">
+                    Exact Matches
+                  </span>
+                  <span className="text-lg font-black text-red-900 tabular-nums">
+                    {matchStats.exactMatchTotal.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* Potential Match Toggle & Threshold */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">
+                      Reflect as Potential Match
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Flag RPL hits &amp; customer cards as Potential Match when significant-word overlap exceeds threshold — including space &amp; special-character variations like <strong>RT</strong> ↔ <strong>R t</strong> and <strong>SMY</strong> ↔ <strong>S.M.Y</strong>.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => updateMatchConfig(prev => ({ ...prev, potentialMatchEnabled: !prev.potentialMatchEnabled }))}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer flex-shrink-0 ${
+                      matchConfig.potentialMatchEnabled ? 'bg-amber-500' : 'bg-slate-300'
+                    }`}
+                    role="switch"
+                    aria-checked={matchConfig.potentialMatchEnabled}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                        matchConfig.potentialMatchEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {matchConfig.potentialMatchEnabled && (
+                  <div className="pt-2.5 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-700">
+                        Potential Match threshold:
+                      </span>
+                      <span className="text-xs font-bold text-slate-500">&gt;</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={matchConfig.potentialMatchThreshold}
+                        onChange={(e) => {
+                          const parsed = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(parsed)) {
+                            const clamped = Math.max(1, Math.min(99, parsed));
+                            updateMatchConfig(prev => ({ ...prev, potentialMatchThreshold: clamped }));
+                          }
+                        }}
+                        className="w-16 px-2 py-1 text-xs font-bold text-center bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 tabular-nums"
+                      />
+                      <span className="text-xs font-bold text-slate-600">%</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {[51, 60, 70, 75].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => updateMatchConfig(prev => ({ ...prev, potentialMatchThreshold: preset }))}
+                          className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-colors cursor-pointer tabular-nums ${
+                            matchConfig.potentialMatchThreshold === preset
+                              ? 'bg-amber-500 text-white border-amber-600'
+                              : 'bg-white hover:bg-amber-50 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          &gt;{preset}%{preset === 51 ? ' Def' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Avoid City Names Toggle */}
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    Avoid City Names in Matching
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Automatically excludes major global city names plus {datasetCities.length.toLocaleString()} {datasetCities.length === 1 ? 'city' : 'cities'} detected from the loaded file&apos;s City column.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => updateMatchConfig(prev => ({ ...prev, ignoreCityNames: !prev.ignoreCityNames }))}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer flex-shrink-0 ${
+                    matchConfig.ignoreCityNames ? 'bg-indigo-600' : 'bg-slate-300'
+                  }`}
+                  role="switch"
+                  aria-checked={matchConfig.ignoreCityNames}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${
+                      matchConfig.ignoreCityNames ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Add / Remove Ignored Words */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Ignored Words ({matchConfig.ignoredWords.length})
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      Words or phrases excluded from both Customer Name and RPL Name before computing match %.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleResetMatchRules}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:text-indigo-700 bg-slate-100 hover:bg-indigo-50 border border-slate-200 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw size={11} />
+                    <span>Reset Defaults</span>
+                  </button>
+                </div>
+
+                {/* Add Word Input */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newIgnoredWordInput}
+                    onChange={(e) => setNewIgnoredWordInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddIgnoredWords();
+                      }
+                    }}
+                    placeholder="Add word(s) or city names, separated by commas (e.g. Solutions, Group, Beijing)..."
+                    className="flex-1 px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-800 placeholder:text-slate-400"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddIgnoredWords}
+                    disabled={!newIgnoredWordInput.trim()}
+                    className="inline-flex items-center gap-1 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white text-xs font-bold shadow-2xs transition-colors cursor-pointer flex-shrink-0"
+                  >
+                    <Plus size={14} />
+                    <span>Add</span>
+                  </button>
+                </div>
+
+                {/* Editable Chips */}
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 max-h-48 overflow-y-auto scrollbar-thin">
+                  {matchConfig.ignoredWords.length === 0 ? (
+                    <p className="text-xs italic text-slate-400 text-center py-3">
+                      No custom ignored words. Add words above to exclude them from matching.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {matchConfig.ignoredWords.map((word) => (
+                        <span
+                          key={word.toLowerCase()}
+                          className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-700 shadow-2xs"
+                        >
+                          <span>{word}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveIgnoredWord(word)}
+                            className="p-0.5 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                            title={`Remove "${word}"`}
+                            aria-label={`Remove ${word}`}
+                          >
+                            <X size={12} />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between gap-3 flex-shrink-0">
+              <span className="text-xs text-slate-500">
+                Changes apply immediately &amp; save automatically.
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowMatchRulesModal(false)}
                 className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-2xs"
               >
                 Done
