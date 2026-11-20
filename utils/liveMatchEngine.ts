@@ -18,6 +18,9 @@ export interface CaseMatchSummary {
   hasExactMatch: boolean;
   hasPotentialMatch: boolean;
   isNoMatch: boolean;
+  isOther: boolean;
+  hasRiskKeyword: boolean;
+  hasAprvCountry: boolean;
   maxMatchPercent: number;
   potentialMatchCount: number;
   exactMatchCount: number;
@@ -26,9 +29,33 @@ export interface CaseMatchSummary {
   rplResultsByRow: Map<number, RplMatchEvaluation>;
 }
 
-export const MATCH_ENGINE_STORAGE_KEY = 'zyme_live_match_config_v2';
+export const MATCH_ENGINE_STORAGE_KEY = 'zyme_live_match_config_v3';
+const PREV_MATCH_ENGINE_STORAGE_KEY_V2 = 'zyme_live_match_config_v2';
 const LEGACY_MATCH_ENGINE_STORAGE_KEY = 'zyme_live_match_config_v1';
 export const MATCH_ENGINE_UPDATED_EVENT = 'zyme:live-match-config-updated';
+
+export const DEFAULT_APRV_COUNTRY_CODES: string[] = [
+  'RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY',
+];
+
+export const DEFAULT_HIGH_RISK_KEYWORDS: string[] = [
+  'SANCTION', 'EMBARGO', 'DENIED',
+  'Lockheed', 'Raytheon', 'Northrop', 'Bae', 'RTX', 'United Technologies', 'UTC', 'Rockwell',
+  'Kharon', 'Alliant', 'AeroVironment', 'ViaSat', 'Data Link Solution', 'Projectina AG',
+  'General Dynamic', 'LUKOIL', 'Citgo', 'Huawei', 'Nayara', 'Wintershall', 'Huntington', 'HII',
+];
+
+const APRV_COUNTRY_NAME_BY_CODE: Record<string, string[]> = {
+  RU: ['russia', 'russian federation'],
+  UA: ['ukraine'],
+  NI: ['nicaragua'],
+  VE: ['venezuela'],
+  BY: ['belarus'],
+  CU: ['cuba'],
+  IR: ['iran'],
+  KP: ['north korea', 'dprk', 'democratic peoples republic of korea'],
+  SY: ['syria', 'syrian arab republic'],
+};
 
 export const DEFAULT_IGNORED_WORDS: string[] = [
   'Technology',
@@ -70,7 +97,7 @@ export const DEFAULT_IGNORED_WORDS: string[] = [
 ];
 
 export const DEFAULT_MATCH_ENGINE_CONFIG: MatchEngineConfig = {
-  potentialMatchEnabled: true,
+  potentialMatchEnabled: false,
   potentialMatchThreshold: 51,
   ignoreCityNames: true,
   ignoredWords: [...DEFAULT_IGNORED_WORDS],
@@ -199,9 +226,9 @@ const dedupeWordsCaseInsensitive = (words: string[]): string[] => {
 
 export const loadMatchEngineConfig = (): MatchEngineConfig => {
   try {
-    const rawV2 = typeof localStorage !== 'undefined' ? localStorage.getItem(MATCH_ENGINE_STORAGE_KEY) : null;
-    if (rawV2) {
-      const parsed = JSON.parse(rawV2);
+    const rawV3 = typeof localStorage !== 'undefined' ? localStorage.getItem(MATCH_ENGINE_STORAGE_KEY) : null;
+    if (rawV3) {
+      const parsed = JSON.parse(rawV3);
       const ignoredWords = Array.isArray(parsed.ignoredWords)
         ? dedupeWordsCaseInsensitive(parsed.ignoredWords)
         : [...DEFAULT_IGNORED_WORDS];
@@ -213,7 +240,7 @@ export const loadMatchEngineConfig = (): MatchEngineConfig => {
           : 51;
       return {
         potentialMatchEnabled:
-          typeof parsed.potentialMatchEnabled === 'boolean' ? parsed.potentialMatchEnabled : true,
+          typeof parsed.potentialMatchEnabled === 'boolean' ? parsed.potentialMatchEnabled : false,
         potentialMatchThreshold: threshold,
         ignoreCityNames:
           typeof parsed.ignoreCityNames === 'boolean' ? parsed.ignoreCityNames : true,
@@ -221,10 +248,14 @@ export const loadMatchEngineConfig = (): MatchEngineConfig => {
       };
     }
 
-    // One-time migration from v1: preserve user's threshold/toggles/custom words and merge newly added defaults
-    const rawV1 = typeof localStorage !== 'undefined' ? localStorage.getItem(LEGACY_MATCH_ENGINE_STORAGE_KEY) : null;
-    if (rawV1) {
-      const parsed = JSON.parse(rawV1);
+    // One-time migration from v2/v1: preserve threshold/ignored words, default Match Rules to OFF (Standard Mode)
+    const rawPrev =
+      typeof localStorage !== 'undefined'
+        ? localStorage.getItem(PREV_MATCH_ENGINE_STORAGE_KEY_V2) ||
+          localStorage.getItem(LEGACY_MATCH_ENGINE_STORAGE_KEY)
+        : null;
+    if (rawPrev) {
+      const parsed = JSON.parse(rawPrev);
       const existing = Array.isArray(parsed.ignoredWords) ? parsed.ignoredWords : [];
       const mergedWords = dedupeWordsCaseInsensitive([...existing, ...DEFAULT_IGNORED_WORDS]);
       const threshold =
@@ -234,8 +265,7 @@ export const loadMatchEngineConfig = (): MatchEngineConfig => {
           ? Math.round(parsed.potentialMatchThreshold)
           : 51;
       const migrated: MatchEngineConfig = {
-        potentialMatchEnabled:
-          typeof parsed.potentialMatchEnabled === 'boolean' ? parsed.potentialMatchEnabled : true,
+        potentialMatchEnabled: false,
         potentialMatchThreshold: threshold,
         ignoreCityNames:
           typeof parsed.ignoreCityNames === 'boolean' ? parsed.ignoreCityNames : true,
@@ -477,19 +507,21 @@ const extractSignificantTokens = (
   return result;
 };
 
-const tokensMatch = (a: string, b: string): boolean => {
-  if (a === b) return true;
+const tokenMatchScore = (a: string, b: string): number => {
+  if (a === b) return 1;
   if (a.length >= 4 && b.length >= 4) {
     const minLen = Math.min(a.length, b.length);
     const maxLen = Math.max(a.length, b.length);
-    if (minLen / maxLen >= 0.75 && (a.startsWith(b) || b.startsWith(a))) {
-      return true;
+    if (a.startsWith(b) || b.startsWith(a)) {
+      // Strong stem match (>=75% length overlap) gets full token credit;
+      // shorter 4+ char prefix overlap (e.g. "Aero" in "AeroTech") gets proportional partial credit (<50%)
+      return minLen / maxLen >= 0.75 ? 1 : minLen / maxLen;
     }
     if (a.length >= 5 && b.length >= 5 && a.slice(0, 5) === b.slice(0, 5) && maxLen - minLen <= 2) {
-      return true;
+      return 1;
     }
   }
-  return false;
+  return 0;
 };
 
 const evaluateTokensAgainstRpl = (
@@ -561,8 +593,13 @@ const evaluateTokensAgainstRpl = (
 
   const matchedKeywords: string[] = [];
   const seenKeywordLower = new Set<string>();
-  const matchedCustIndices = new Set<number>();
-  const matchedRplIndices = new Set<number>();
+  const matchedCustWeights = new Map<number, number>();
+  const matchedRplWeights = new Map<number, number>();
+
+  const setMaxWeight = (map: Map<number, number>, idx: number, weight: number) => {
+    const prev = map.get(idx) ?? 0;
+    if (weight > prev) map.set(idx, weight);
+  };
 
   const pushKeyword = (kw: string) => {
     const lower = kw.toLowerCase();
@@ -572,51 +609,62 @@ const evaluateTokensAgainstRpl = (
     }
   };
 
-  // Pass 1: Direct & stem token matches
+  // Pass 1: Direct, stem & partial prefix token matches
   for (let i = 0; i < custTokens.length; i++) {
     const ct = custTokens[i];
-    let foundMatch = false;
+    let bestScore = 0;
+    let bestDisplay = ct.display;
     for (let j = 0; j < rplTokens.length; j++) {
-      if (tokensMatch(ct.clean, rplTokens[j].clean)) {
-        matchedRplIndices.add(j);
-        foundMatch = true;
+      const score = tokenMatchScore(ct.clean, rplTokens[j].clean);
+      if (score > 0) {
+        setMaxWeight(matchedRplWeights, j, score);
+        if (score > bestScore) {
+          bestScore = score;
+          // For partial prefix matches, show the shorter common matching name piece
+          bestDisplay =
+            score < 1 && rplTokens[j].clean.length < ct.clean.length
+              ? rplTokens[j].display
+              : ct.display;
+        }
       }
     }
-    if (foundMatch) {
-      matchedCustIndices.add(i);
-      pushKeyword(ct.display);
+    if (bestScore > 0) {
+      setMaxWeight(matchedCustWeights, i, bestScore);
+      pushKeyword(bestDisplay);
     }
   }
 
   // Pass 2: Adjacent 2-token fusion matches (handles space/punctuation split words
   // when additional words are also present, e.g., "Hua Yu Holdings" vs "Huayu Trading")
   for (let i = 0; i < custTokens.length - 1; i++) {
-    if (matchedCustIndices.has(i) && matchedCustIndices.has(i + 1)) continue;
+    if ((matchedCustWeights.get(i) ?? 0) >= 1 && (matchedCustWeights.get(i + 1) ?? 0) >= 1) continue;
     const fusedCust = custTokens[i].clean + custTokens[i + 1].clean;
     for (let j = 0; j < rplTokens.length; j++) {
-      if (tokensMatch(fusedCust, rplTokens[j].clean)) {
-        matchedCustIndices.add(i);
-        matchedCustIndices.add(i + 1);
-        matchedRplIndices.add(j);
+      const score = tokenMatchScore(fusedCust, rplTokens[j].clean);
+      if (score >= 1) {
+        setMaxWeight(matchedCustWeights, i, 1);
+        setMaxWeight(matchedCustWeights, i + 1, 1);
+        setMaxWeight(matchedRplWeights, j, 1);
         pushKeyword(`${custTokens[i].display} ${custTokens[i + 1].display}`);
       }
     }
   }
 
   for (let j = 0; j < rplTokens.length - 1; j++) {
-    if (matchedRplIndices.has(j) && matchedRplIndices.has(j + 1)) continue;
+    if ((matchedRplWeights.get(j) ?? 0) >= 1 && (matchedRplWeights.get(j + 1) ?? 0) >= 1) continue;
     const fusedRpl = rplTokens[j].clean + rplTokens[j + 1].clean;
     for (let i = 0; i < custTokens.length; i++) {
-      if (tokensMatch(custTokens[i].clean, fusedRpl)) {
-        matchedCustIndices.add(i);
-        matchedRplIndices.add(j);
-        matchedRplIndices.add(j + 1);
+      const score = tokenMatchScore(custTokens[i].clean, fusedRpl);
+      if (score >= 1) {
+        setMaxWeight(matchedCustWeights, i, 1);
+        setMaxWeight(matchedRplWeights, j, 1);
+        setMaxWeight(matchedRplWeights, j + 1, 1);
         pushKeyword(custTokens[i].display);
       }
     }
   }
 
-  if (matchedCustIndices.size === 0) {
+  if (matchedCustWeights.size === 0) {
     return {
       isExact: false,
       matchPercent: 0,
@@ -627,15 +675,20 @@ const evaluateTokensAgainstRpl = (
     };
   }
 
-  // Dice similarity across significant tokens (after stripping ignored words & city names)
-  const matchPercent = Math.min(
-    100,
-    Math.round(
-      ((matchedCustIndices.size + matchedRplIndices.size) /
-        (custTokens.length + rplTokens.length)) *
-        100
-    )
+  let custWeightSum = 0;
+  matchedCustWeights.forEach(w => {
+    custWeightSum += w;
+  });
+  let rplWeightSum = 0;
+  matchedRplWeights.forEach(w => {
+    rplWeightSum += w;
+  });
+
+  // Weighted Dice similarity across significant tokens (always >= 1% when a keyword matched)
+  const rawPct = Math.round(
+    ((custWeightSum + rplWeightSum) / (custTokens.length + rplTokens.length)) * 100
   );
+  const matchPercent = Math.min(100, Math.max(1, rawPct));
 
   const isPotentialMatch =
     lookup.potentialMatchEnabled &&
@@ -675,11 +728,129 @@ export const evaluateRplMatch = (
   );
 };
 
+export interface CompiledRiskAprvMatcher {
+  riskRegex: RegExp | null;
+  aprvCodeSet: Set<string>;
+  aprvCountryNameRegex: RegExp | null;
+}
+
+const ALERT_STATUS_RISK_REGEX = /(?:^|[^A-Z0-9])(?:ZKWD|ZEMB|EMBF|EMBN)(?:[^A-Z0-9]|$)/i;
+const APRV_STATUS_REGEX = /(?:^|[^A-Z0-9])APRV(?:[^A-Z0-9]|$)/i;
+
+export const compileRiskAndAprvMatcher = (
+  highRiskKeywords: string[] = DEFAULT_HIGH_RISK_KEYWORDS,
+  aprvCodes: string[] = DEFAULT_APRV_COUNTRY_CODES
+): CompiledRiskAprvMatcher => {
+  const cleanedKeywords = highRiskKeywords
+    .map(k => String(k || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+
+  const riskRegex =
+    cleanedKeywords.length > 0
+      ? new RegExp(
+          `(?:^|[^a-z0-9])(?:${cleanedKeywords
+            .map(k => escapeRegex(k).replace(/\s+/g, '[\\s-_]+'))
+            .join('|')})(?:[^a-z0-9]|$)`,
+          'i'
+        )
+      : null;
+
+  const aprvCodeSet = new Set<string>();
+  const countryNames = new Set<string>();
+  for (const rawCode of aprvCodes) {
+    const code = String(rawCode || '').trim().toUpperCase();
+    if (!code) continue;
+    aprvCodeSet.add(code);
+    const aliases = APRV_COUNTRY_NAME_BY_CODE[code];
+    if (aliases) {
+      for (const alias of aliases) countryNames.add(alias);
+    }
+  }
+
+  const nameList = Array.from(countryNames).sort((a, b) => b.length - a.length);
+  const aprvCountryNameRegex =
+    nameList.length > 0
+      ? new RegExp(`(?:^|[^a-z0-9])(?:${nameList.map(escapeRegex).join('|')})(?:[^a-z0-9]|$)`, 'i')
+      : null;
+
+  return { riskRegex, aprvCodeSet, aprvCountryNameRegex };
+};
+
+export const checkCaseRiskAndAprv = (
+  customerName: string,
+  country: string | undefined,
+  status: string | undefined,
+  rplEntries: { rowIndex: number; rplName: string }[],
+  matcher?: CompiledRiskAprvMatcher
+): { hasRiskKeyword: boolean; hasAprvCountry: boolean } => {
+  const activeMatcher = matcher || compileRiskAndAprvMatcher();
+
+  let hasRiskKeyword = false;
+  if (
+    (status && ALERT_STATUS_RISK_REGEX.test(status)) ||
+    (customerName && ALERT_STATUS_RISK_REGEX.test(customerName))
+  ) {
+    hasRiskKeyword = true;
+  } else if (activeMatcher.riskRegex) {
+    if (
+      (customerName && activeMatcher.riskRegex.test(customerName)) ||
+      (status && activeMatcher.riskRegex.test(status))
+    ) {
+      hasRiskKeyword = true;
+    } else {
+      for (let i = 0; i < rplEntries.length; i++) {
+        const rn = rplEntries[i].rplName;
+        if (rn && activeMatcher.riskRegex.test(rn)) {
+          hasRiskKeyword = true;
+          break;
+        }
+      }
+    }
+  }
+
+  let hasAprvCountry = false;
+  if (
+    (status && APRV_STATUS_REGEX.test(status)) ||
+    (customerName && APRV_STATUS_REGEX.test(customerName))
+  ) {
+    hasAprvCountry = true;
+  } else if (country) {
+    const rawCountry = country.trim();
+    if (rawCountry) {
+      const upper = rawCountry.toUpperCase();
+      if (activeMatcher.aprvCodeSet.has(upper)) {
+        hasAprvCountry = true;
+      } else {
+        const tokens = upper.split(/[^A-Z0-9]+/).filter(Boolean);
+        for (let i = 0; i < tokens.length; i++) {
+          if (activeMatcher.aprvCodeSet.has(tokens[i])) {
+            hasAprvCountry = true;
+            break;
+          }
+        }
+      }
+      if (!hasAprvCountry && activeMatcher.aprvCountryNameRegex) {
+        if (activeMatcher.aprvCountryNameRegex.test(rawCountry)) {
+          hasAprvCountry = true;
+        }
+      }
+    }
+  }
+
+  return { hasRiskKeyword, hasAprvCountry };
+};
+
 export const evaluateCaseMatches = (
   customerName: string,
   customerCity: string | undefined,
   rplEntries: { rowIndex: number; rplName: string }[],
-  lookup: CompiledIgnoreLookup
+  lookup: CompiledIgnoreLookup,
+  options?: {
+    country?: string;
+    status?: string;
+    riskAprvMatcher?: CompiledRiskAprvMatcher;
+  }
 ): CaseMatchSummary => {
   const rplResultsByRow = new Map<number, RplMatchEvaluation>();
   let hasExactMatch = false;
@@ -734,13 +905,34 @@ export const evaluateCaseMatches = (
     }
   }
 
+  const { hasRiskKeyword, hasAprvCountry } = checkCaseRiskAndAprv(
+    cRaw,
+    options?.country,
+    options?.status,
+    rplEntries,
+    options?.riskAprvMatcher
+  );
+
+  // Strict No Match: zero RPL<->Customer match (with Ignored Words exempted),
+  // AND must NOT contain any Risk Keywords or APRV Country Codes.
   const isNoMatch =
-    !hasExactMatch && !hasPotentialMatch && matchedKeywords.length === 0 && maxMatchPercent === 0;
+    !hasExactMatch &&
+    !hasPotentialMatch &&
+    matchedKeywords.length === 0 &&
+    maxMatchPercent === 0 &&
+    !hasRiskKeyword &&
+    !hasAprvCountry;
+
+  // Others: everything other than No Match and Potential Match
+  const isOther = !isNoMatch && !hasPotentialMatch;
 
   return {
     hasExactMatch,
     hasPotentialMatch,
     isNoMatch,
+    isOther,
+    hasRiskKeyword,
+    hasAprvCountry,
     maxMatchPercent,
     potentialMatchCount,
     exactMatchCount,

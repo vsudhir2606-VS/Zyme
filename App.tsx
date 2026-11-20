@@ -119,10 +119,11 @@ export default function App() {
     noMatchTotal: number;
     noMatchPending: number;
     potentialMatchTotal: number;
+    othersTotal: number;
     exactMatchTotal: number;
   }>(() => {
     const cached = (window as any).__zymeLiveMatchStats;
-    return cached || { totalCases: 0, noMatchTotal: 0, noMatchPending: 0, potentialMatchTotal: 0, exactMatchTotal: 0 };
+    return cached || { totalCases: 0, noMatchTotal: 0, noMatchPending: 0, potentialMatchTotal: 0, othersTotal: 0, exactMatchTotal: 0 };
   });
 
   const handleSelectLiveUiPreset = (preset: LiveUiPresetOption) => {
@@ -721,6 +722,8 @@ export default function App() {
           <LiveProcessing 
             initialProcessedRows={liveProcessingRows}
             initialFileName={liveProcessingFileName}
+            highRiskKeywords={highRiskKeywords}
+            aprvCodes={aprvCodes}
             onOpenSettings={() => setIsSettingsOpen(true)}
           />
         ) : activeTab === 'consolidator' ? (
@@ -852,11 +855,11 @@ export default function App() {
                   <Filter size={15} className={settingsActiveTab === 'rpl_match' ? 'text-indigo-600' : 'text-slate-400'} />
                   <span>Live Processing &amp; Match Rules</span>
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold tabular-nums ${
-                    settingsActiveTab === 'rpl_match'
+                    matchConfig.potentialMatchEnabled
                       ? 'bg-amber-100 text-amber-800'
                       : 'bg-slate-200/80 text-slate-600'
                   }`}>
-                    &gt;{matchConfig.potentialMatchThreshold}%
+                    {matchConfig.potentialMatchEnabled ? `>${matchConfig.potentialMatchThreshold}%` : 'Standard'}
                   </span>
                 </button>
 
@@ -902,150 +905,33 @@ export default function App() {
               {/* MODAL BODY */}
               <div className="p-6 overflow-y-auto space-y-5 flex-1 min-h-0 bg-slate-50/40">
 
-                {/* TAB 0: POTENTIAL MATCH (>51%) & IGNORED WORDS */}
+                {/* TAB 0: LIVE PROCESSING & MATCH RULES (OPT-IN; OFF = STANDARD MODE) */}
                 {settingsActiveTab === 'rpl_match' && (
                   <div className="space-y-4">
-                    {/* Top Rule & Stat Overview */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Potential Match Rule
-                        </span>
-                        <div className="text-xl font-black text-amber-700 mt-1 tabular-nums flex items-baseline gap-1.5">
-                          <span>{matchConfig.potentialMatchEnabled ? `>${matchConfig.potentialMatchThreshold}%` : 'OFF'}</span>
-                          <span className="text-xs font-semibold text-slate-500">customer vs RPL</span>
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Space &amp; Special Chars
-                        </span>
-                        <div className="text-[11px] font-bold mt-1.5 flex items-center gap-1.5 flex-wrap">
-                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
-                            RT ↔ R t
-                          </span>
-                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
-                            SMY ↔ S.M.Y
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="p-3 bg-white rounded-2xl border border-slate-200/90 shadow-2xs">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Ignored Words
-                        </span>
-                        <div className="text-xl font-black text-indigo-700 mt-1 tabular-nums flex items-baseline gap-1.5">
-                          <span>{matchConfig.ignoredWords.length}</span>
-                          <span className="text-xs font-semibold text-slate-500">excluded</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {matchSettingsNotice && (
-                      <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
-                        matchSettingsNotice.type === 'error'
-                          ? 'bg-rose-50 border-rose-200 text-rose-800'
-                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      }`}>
-                        {matchSettingsNotice.type === 'error' ? (
-                          <X size={14} className="text-rose-600 flex-shrink-0" />
-                        ) : (
-                          <Check size={14} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
-                        )}
-                        <span>{matchSettingsNotice.text}</span>
-                      </div>
-                    )}
-
-                    {/* Section 0: Bulk No-Match Action & Live Processing UI Layout */}
-                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-4">
-                      {/* Bulk No-Match Quick Action */}
-                      <div className="flex items-center justify-between gap-3 flex-wrap pb-3 border-b border-slate-100">
-                        <div>
-                          <h4 className="text-sm font-bold text-slate-900">
-                            Bulk No-Match Action
-                          </h4>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {liveMatchStats.totalCases > 0
-                              ? `${liveMatchStats.noMatchTotal.toLocaleString()} No-Match cases detected (${liveMatchStats.noMatchPending.toLocaleString()} pending review) in the active Live Processing file.`
-                              : 'Load a file in Live Processing to open and apply bulk decisions to all No-Match cases.'}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={handleTriggerBulkNoMatchFromSettings}
-                          disabled={liveMatchStats.noMatchTotal === 0}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed text-emerald-900 text-xs font-bold shadow-2xs transition-all cursor-pointer tabular-nums"
-                        >
-                          <CheckSquare size={14} className="text-emerald-700" />
-                          <span>
-                            Bulk No-Match{liveMatchStats.noMatchTotal > 0 ? ` (${liveMatchStats.noMatchPending > 0 ? liveMatchStats.noMatchPending : liveMatchStats.noMatchTotal})` : ''}
-                          </span>
-                        </button>
-                      </div>
-
-                      {/* UI Layout Preset Switcher */}
-                      <div className="space-y-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div>
-                            <h4 className="text-sm font-bold text-slate-900">
-                              Live Processing UI Layout
-                            </h4>
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              Choose the workspace visual density and theme for Live Processing.
-                            </p>
-                          </div>
-                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold">
-                            UI: {liveUiPreset === 'modern' ? 'Modern' : liveUiPreset === 'compact' ? 'High-Density' : liveUiPreset === 'focus' ? 'Focus' : 'Auditor'}
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                          {([
-                            { id: 'modern' as const, label: 'Modern', desc: 'Balanced & clean', icon: Layout },
-                            { id: 'compact' as const, label: 'High-Density', desc: 'Compact view', icon: Layers },
-                            { id: 'focus' as const, label: 'Focus', desc: 'Dark command', icon: Monitor },
-                            { id: 'auditor' as const, label: 'Auditor', desc: 'Structured grid', icon: Columns },
-                          ]).map((item) => {
-                            const Icon = item.icon;
-                            const active = liveUiPreset === item.id;
-                            return (
-                              <button
-                                key={item.id}
-                                type="button"
-                                onClick={() => handleSelectLiveUiPreset(item.id)}
-                                className={`flex flex-col items-start gap-1 p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                                  active
-                                    ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-300 shadow-2xs'
-                                    : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-slate-300'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between w-full">
-                                  <Icon size={14} className={active ? 'text-indigo-600' : 'text-slate-500'} />
-                                  {active && <Check size={12} strokeWidth={3} className="text-indigo-600" />}
-                                </div>
-                                <span className={`text-xs font-bold ${active ? 'text-indigo-950' : 'text-slate-800'}`}>
-                                  {item.label}
-                                </span>
-                                <span className="text-[10px] text-slate-500 leading-tight">
-                                  {item.desc}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Section 1: Customer vs RPL Potential Match Threshold */}
-                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+                    {/* Master Switch: Standard Mode (OFF) vs Match Rules Engine (ON) */}
+                    <div className={`p-4 rounded-2xl border shadow-2xs space-y-3 transition-colors ${
+                      matchConfig.potentialMatchEnabled
+                        ? 'bg-amber-50/60 border-amber-300'
+                        : 'bg-white border-slate-200/90'
+                    }`}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <h4 className="text-sm font-bold text-slate-900">
-                            Customer vs RPL Potential Match (&gt;{matchConfig.potentialMatchThreshold}%)
-                          </h4>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            Automatically reflects a case &amp; RPL hit as <strong>Potential Match</strong> when the RPL name matches the customer name by more than your set percentage — including space &amp; special-character variations like <strong>RT</strong> ↔ <strong>R t</strong> and <strong>SMY</strong> ↔ <strong>S.M.Y</strong>.
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="text-sm font-bold text-slate-900">
+                              Match Rules, Ignored Words &amp; Bulk No-Match
+                            </h4>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                              matchConfig.potentialMatchEnabled
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-slate-200 text-slate-700'
+                            }`}>
+                              {matchConfig.potentialMatchEnabled ? `Active (>${matchConfig.potentialMatchThreshold}%)` : 'OFF • Standard Mode'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1">
+                            {matchConfig.potentialMatchEnabled
+                              ? 'Enabled: Highlights Potential Matches (>threshold%), filters Ignored Words & Cities, separates No Match / Potential / Others (protecting Risk Keywords & APRV Country Codes), and enables Bulk Decisions.'
+                              : 'Standard Mode is active (clean baseline without Potential Match, Ignored Words, or Bulk No-Match). Turn this ON manually whenever you want to use Potential Match (>51%), Ignored Words, Others, and Bulk No-Match.'}
                           </p>
                         </div>
                         <button
@@ -1066,7 +952,7 @@ export default function App() {
                       </div>
 
                       {matchConfig.potentialMatchEnabled && (
-                        <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
+                        <div className="pt-3 border-t border-amber-200/80 flex items-center justify-between gap-3 flex-wrap">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-semibold text-slate-700">
                               Potential Match threshold:
@@ -1084,7 +970,7 @@ export default function App() {
                                   updateSettingsMatchConfig(prev => ({ ...prev, potentialMatchThreshold: clamped }));
                                 }
                               }}
-                              className="w-16 px-2 py-1 text-xs font-bold text-center bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 focus:bg-white tabular-nums"
+                              className="w-16 px-2 py-1 text-xs font-bold text-center bg-white border border-amber-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500/30 focus:border-amber-500 tabular-nums"
                             />
                             <span className="text-xs font-bold text-slate-600">%</span>
                           </div>
@@ -1098,7 +984,7 @@ export default function App() {
                                 className={`px-2 py-1 rounded-lg text-[11px] font-bold border transition-colors cursor-pointer tabular-nums ${
                                   matchConfig.potentialMatchThreshold === preset
                                     ? 'bg-amber-500 text-white border-amber-600'
-                                    : 'bg-slate-50 hover:bg-amber-50 text-slate-700 border-slate-200'
+                                    : 'bg-white hover:bg-amber-50 text-slate-700 border-slate-200'
                                 }`}
                               >
                                 &gt;{preset}%{preset === 51 ? ' Default' : ''}
@@ -1109,103 +995,240 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Section 2: Ignored / Excluded Words & City Names */}
-                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
-                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                    {matchSettingsNotice && (
+                      <div className={`p-3 rounded-xl text-xs font-semibold flex items-center gap-2 border ${
+                        matchSettingsNotice.type === 'error'
+                          ? 'bg-rose-50 border-rose-200 text-rose-800'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      }`}>
+                        {matchSettingsNotice.type === 'error' ? (
+                          <X size={14} className="text-rose-600 flex-shrink-0" />
+                        ) : (
+                          <Check size={14} strokeWidth={3} className="text-emerald-600 flex-shrink-0" />
+                        )}
+                        <span>{matchSettingsNotice.text}</span>
+                      </div>
+                    )}
+
+                    {/* UI Layout Preset Switcher (always available in Standard & Match Rules modes) */}
+                    <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
                         <div>
                           <h4 className="text-sm font-bold text-slate-900">
-                            Ignored Words &amp; City Names
+                            Live Processing UI Layout
                           </h4>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            Words below (City names, Technology, LLC, Inc, PVT, Development, Ltd, Limited, IT, Solution, INDIA, INSTITUTE, Science, SCIENTIFIC, Research, infotech, CONG, TY, TNHH, International, system, constuction, services, management, etc.) are excluded before calculating Potential Match (&gt;{matchConfig.potentialMatchThreshold}%) and Matching Keywords.
+                            Choose the workspace visual density and theme for Live Processing.
                           </p>
                         </div>
-
-                        <button
-                          type="button"
-                          onClick={handleResetIgnoredWords}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:text-indigo-700 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-                          title="Restore default threshold (51%) and ignored words"
-                        >
-                          <RotateCcw size={12} />
-                          <span>Reset Defaults</span>
-                        </button>
+                        <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-bold">
+                          UI: {liveUiPreset === 'modern' ? 'Modern' : liveUiPreset === 'compact' ? 'High-Density' : liveUiPreset === 'focus' ? 'Focus' : 'Auditor'}
+                        </span>
                       </div>
 
-                      {/* Dynamic City Names Auto-Ignore Toggle */}
-                      <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-indigo-50/60 border border-indigo-100 cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={matchConfig.ignoreCityNames}
-                          onChange={handleToggleIgnoreCaseCity}
-                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                        />
-                        <span className="text-xs font-semibold text-indigo-950">
-                          Automatically exclude major global cities &amp; each file&apos;s City column values during matching
-                        </span>
-                      </label>
-
-                      {/* Add New Word(s) Form */}
-                      <form onSubmit={handleAddIgnoredWords} className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          value={newIgnoredWordInput}
-                          onChange={(e) => setNewIgnoredWordInput(e.target.value)}
-                          placeholder="Add word or phrase to ignore (comma-separated allowed, e.g. Holdings, Pune)..."
-                          className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
-                        />
-                        <button
-                          type="submit"
-                          disabled={!newIgnoredWordInput.trim()}
-                          className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
-                        >
-                          <Plus size={14} />
-                          <span>Add Word</span>
-                        </button>
-                      </form>
-
-                      {/* Filter & Removable Chips List */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="relative flex-1 max-w-xs">
-                            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                            <input
-                              type="text"
-                              value={ignoredWordsFilter}
-                              onChange={(e) => setIgnoredWordsFilter(e.target.value)}
-                              placeholder="Filter ignored words..."
-                              className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <span className="text-[11px] text-slate-500 tabular-nums">
-                            {filteredIgnoredWords.length} of {matchConfig.ignoredWords.length} words
-                          </span>
-                        </div>
-
-                        <div className="max-h-44 overflow-y-auto flex flex-wrap gap-1.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 scrollbar-thin">
-                          {filteredIgnoredWords.map((word) => (
-                            <span
-                              key={word}
-                              className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-700 shadow-2xs"
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        {([
+                          { id: 'modern' as const, label: 'Modern', desc: 'Balanced & clean', icon: Layout },
+                          { id: 'compact' as const, label: 'High-Density', desc: 'Compact view', icon: Layers },
+                          { id: 'focus' as const, label: 'Focus', desc: 'Dark command', icon: Monitor },
+                          { id: 'auditor' as const, label: 'Auditor', desc: 'Structured grid', icon: Columns },
+                        ]).map((item) => {
+                          const Icon = item.icon;
+                          const active = liveUiPreset === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => handleSelectLiveUiPreset(item.id)}
+                              className={`flex flex-col items-start gap-1 p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                                active
+                                  ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-300 shadow-2xs'
+                                  : 'border-slate-200 bg-slate-50/60 hover:bg-white hover:border-slate-300'
+                              }`}
                             >
-                              <span>{word}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveIgnoredWord(word)}
-                                className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
-                                title={`Remove "${word}" from ignored words`}
-                                aria-label={`Remove ${word}`}
-                              >
-                                <X size={11} />
-                              </button>
-                            </span>
-                          ))}
-                          {filteredIgnoredWords.length === 0 && (
-                            <span className="text-xs text-slate-400 italic">No ignored words match your filter.</span>
-                          )}
-                        </div>
+                              <div className="flex items-center justify-between w-full">
+                                <Icon size={14} className={active ? 'text-indigo-600' : 'text-slate-500'} />
+                                {active && <Check size={12} strokeWidth={3} className="text-indigo-600" />}
+                              </div>
+                              <span className={`text-xs font-bold ${active ? 'text-indigo-950' : 'text-slate-800'}`}>
+                                {item.label}
+                              </span>
+                              <span className="text-[10px] text-slate-500 leading-tight">
+                                {item.desc}
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
+
+                    {/* Advanced Match Rules Sections (shown when manually enabled above) */}
+                    {matchConfig.potentialMatchEnabled && (
+                      <>
+                        {/* Live Category Overview & Bulk No-Match Quick Action */}
+                        <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-center">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 block">
+                                No Match
+                              </span>
+                              <span className="text-lg font-black text-emerald-900 tabular-nums">
+                                {liveMatchStats.noMatchTotal.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200 text-center">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 block">
+                                Potential &gt;{matchConfig.potentialMatchThreshold}%
+                              </span>
+                              <span className="text-lg font-black text-amber-900 tabular-nums">
+                                {liveMatchStats.potentialMatchTotal.toLocaleString()}
+                              </span>
+                            </div>
+                            <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-200 text-center">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 block">
+                                Others
+                              </span>
+                              <span className="text-lg font-black text-indigo-900 tabular-nums">
+                                {(liveMatchStats.othersTotal ?? 0).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 flex-wrap pt-2 border-t border-slate-100">
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-900">
+                                Bulk No-Match Action
+                              </h4>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                {liveMatchStats.totalCases > 0
+                                  ? `${liveMatchStats.noMatchTotal.toLocaleString()} pure No-Match orders (${liveMatchStats.noMatchPending.toLocaleString()} pending) — automatically excludes Risk Keywords & APRV Country Codes.`
+                                  : 'Only includes orders with zero RPL ↔ Customer match (Ignored Words exempted) and NO Risk Keywords or APRV Country Codes.'}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleTriggerBulkNoMatchFromSettings}
+                              disabled={liveMatchStats.noMatchTotal === 0}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-45 disabled:cursor-not-allowed text-emerald-900 text-xs font-bold shadow-2xs transition-all cursor-pointer tabular-nums"
+                            >
+                              <CheckSquare size={14} className="text-emerald-700" />
+                              <span>
+                                Bulk No-Match{liveMatchStats.noMatchTotal > 0 ? ` (${liveMatchStats.noMatchPending > 0 ? liveMatchStats.noMatchPending : liveMatchStats.noMatchTotal})` : ''}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Ignored / Excluded Words & City Names */}
+                        <div className="p-4 rounded-2xl bg-white border border-slate-200/90 shadow-2xs space-y-3">
+                          <div className="flex items-start justify-between gap-3 flex-wrap">
+                            <div>
+                              <h4 className="text-sm font-bold text-slate-900">
+                                Ignored Words &amp; City Names
+                              </h4>
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                Exempted when comparing RPL vs Customer for Potential Match (&gt;{matchConfig.potentialMatchThreshold}%), No Match, and Others (supports space &amp; special chars like <strong>RT ↔ R t</strong> and <strong>SMY ↔ S.M.Y</strong>).
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const defaults: MatchEngineConfig = {
+                                  ...DEFAULT_MATCH_ENGINE_CONFIG,
+                                  potentialMatchEnabled: true,
+                                  ignoredWords: [...DEFAULT_IGNORED_WORDS],
+                                };
+                                setMatchConfig(defaults);
+                                saveMatchEngineConfig(defaults);
+                                setIgnoredWordsFilter('');
+                                setMatchSettingsNotice({ type: 'success', text: 'Potential match threshold (51%) & ignored words reset to defaults.' });
+                                setTimeout(() => setMatchSettingsNotice(null), 3500);
+                              }}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:text-indigo-700 bg-slate-50 hover:bg-indigo-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
+                              title="Restore default threshold (51%) and ignored words"
+                            >
+                              <RotateCcw size={12} />
+                              <span>Reset Defaults</span>
+                            </button>
+                          </div>
+
+                          {/* Dynamic City Names Auto-Ignore Toggle */}
+                          <label className="flex items-center gap-2.5 p-2.5 rounded-xl bg-indigo-50/60 border border-indigo-100 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={matchConfig.ignoreCityNames}
+                              onChange={handleToggleIgnoreCaseCity}
+                              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            />
+                            <span className="text-xs font-semibold text-indigo-950">
+                              Automatically exclude major global cities &amp; each file&apos;s City column values during matching
+                            </span>
+                          </label>
+
+                          {/* Add New Word(s) Form */}
+                          <form onSubmit={handleAddIgnoredWords} className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={newIgnoredWordInput}
+                              onChange={(e) => setNewIgnoredWordInput(e.target.value)}
+                              placeholder="Add word or phrase to ignore (comma-separated allowed, e.g. Holdings, Pune)..."
+                              className="flex-1 px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!newIgnoredWordInput.trim()}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-900 hover:bg-indigo-600 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer"
+                            >
+                              <Plus size={14} />
+                              <span>Add Word</span>
+                            </button>
+                          </form>
+
+                          {/* Filter & Removable Chips List */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="relative flex-1 max-w-xs">
+                                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input
+                                  type="text"
+                                  value={ignoredWordsFilter}
+                                  onChange={(e) => setIgnoredWordsFilter(e.target.value)}
+                                  placeholder="Filter ignored words..."
+                                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                />
+                              </div>
+                              <span className="text-[11px] text-slate-500 tabular-nums">
+                                {filteredIgnoredWords.length} of {matchConfig.ignoredWords.length} words
+                              </span>
+                            </div>
+
+                            <div className="max-h-44 overflow-y-auto flex flex-wrap gap-1.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200/70 scrollbar-thin">
+                              {filteredIgnoredWords.map((word) => (
+                                <span
+                                  key={word}
+                                  className="inline-flex items-center gap-1 pl-2.5 pr-1.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-semibold text-slate-700 shadow-2xs"
+                                >
+                                  <span>{word}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveIgnoredWord(word)}
+                                    className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                    title={`Remove "${word}" from ignored words`}
+                                    aria-label={`Remove ${word}`}
+                                  >
+                                    <X size={11} />
+                                  </button>
+                                </span>
+                              ))}
+                              {filteredIgnoredWords.length === 0 && (
+                                <span className="text-xs text-slate-400 italic">No ignored words match your filter.</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
 

@@ -61,10 +61,13 @@ import {
   CaseMatchSummary,
   DEFAULT_IGNORED_WORDS,
   DEFAULT_MATCH_ENGINE_CONFIG,
+  DEFAULT_HIGH_RISK_KEYWORDS,
+  DEFAULT_APRV_COUNTRY_CODES,
   MATCH_ENGINE_UPDATED_EVENT,
   loadMatchEngineConfig,
   saveMatchEngineConfig,
   compileIgnoreLookup,
+  compileRiskAndAprvMatcher,
   evaluateCaseMatches,
 } from '../utils/liveMatchEngine.ts';
 import { 
@@ -373,6 +376,8 @@ export interface LiveProcessingCase {
   streetDetails?: { label: string; value: string }[];
   matchingName?: string;
   matchingNames?: string[];
+  fileMatchName?: string;
+  fileMatchNames?: string[];
   city?: string;
   postalCode?: string;
   state?: string;
@@ -891,6 +896,8 @@ interface LiveProcessingProps {
   initialFile?: File | null;
   initialProcessedRows?: any[][] | null;
   initialFileName?: string | null;
+  highRiskKeywords?: string[];
+  aprvCodes?: string[];
   onBack?: () => void;
   onOpenSettings?: () => void;
 }
@@ -899,6 +906,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   initialFile = null,
   initialProcessedRows = null,
   initialFileName = null,
+  highRiskKeywords = DEFAULT_HIGH_RISK_KEYWORDS,
+  aprvCodes = DEFAULT_APRV_COUNTRY_CODES,
   onBack,
   onOpenSettings,
 }) => {
@@ -926,7 +935,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
   // Review preferences & filter
   const [autoAdvance, setAutoAdvance] = useState(true);
-  const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'reviewed' | 'no-match' | 'potential-match' | LiveActionType>('all');
+  const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'reviewed' | 'no-match' | 'potential-match' | 'others' | LiveActionType>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [rplSearchQuery, setRplSearchQuery] = useState('');
   const [caseNote, setCaseNote] = useState('');
@@ -1011,6 +1020,29 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }));
   };
 
+  // Master switch: Match Rules (Potential Match, Ignored Words, Bulk No-Match, Others) must be turned ON manually in Settings.
+  // When OFF, Live Processing runs in Standard Mode (Nov 17 baseline).
+  const matchRulesActive = matchConfig.potentialMatchEnabled;
+
+  // Reset match-rule filters/sort/selections automatically when returning to Standard Mode (OFF)
+  useEffect(() => {
+    if (!matchRulesActive) {
+      if (filterMode === 'no-match' || filterMode === 'potential-match' || filterMode === 'others') {
+        setFilterMode('all');
+      }
+      if (sortOption === 'no-match-first') {
+        setSortOption('original');
+      }
+      if (selectedCaseIds.size > 0) {
+        setSelectedCaseIds(new Set());
+        setLastBulkAnchorId(null);
+      }
+      if (bulkNotice) {
+        setBulkNotice(null);
+      }
+    }
+  }, [matchRulesActive, filterMode, sortOption, selectedCaseIds.size, bulkNotice]);
+
   // Extract unique city names from loaded dataset for automatic city-name exclusion
   const datasetCities = useMemo(() => {
     const set = new Set<string>();
@@ -1026,21 +1058,39 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     [matchConfig, datasetCities]
   );
 
-  // Evaluate Potential Match (>51%), Exact Match, No Match & Matching Keywords per case
+  const compiledRiskAprvMatcher = useMemo(
+    () => compileRiskAndAprvMatcher(highRiskKeywords, aprvCodes),
+    [highRiskKeywords, aprvCodes]
+  );
+
+  // Evaluate Potential Match (>51%), Exact Match, Strict No Match (no Risk Keywords / no APRV codes) & Others per case
   const caseMatchMap = useMemo(() => {
     const map = new Map<string, CaseMatchSummary>();
+    if (!matchRulesActive) return map;
     for (let i = 0; i < cases.length; i++) {
       const c = cases[i];
-      map.set(c.caseId, evaluateCaseMatches(c.customerName, c.city, c.rplEntries, compiledIgnoreLookup));
+      map.set(
+        c.caseId,
+        evaluateCaseMatches(c.customerName, c.city, c.rplEntries, compiledIgnoreLookup, {
+          country: c.country,
+          status: c.status,
+          riskAprvMatcher: compiledRiskAprvMatcher,
+        })
+      );
     }
     return map;
-  }, [cases, compiledIgnoreLookup]);
+  }, [cases, compiledIgnoreLookup, compiledRiskAprvMatcher, matchRulesActive]);
 
   const matchStats = useMemo(() => {
     let noMatchTotal = 0;
     let noMatchPending = 0;
     let potentialMatchTotal = 0;
+    let othersTotal = 0;
+    let othersPending = 0;
     let exactMatchTotal = 0;
+    if (!matchRulesActive) {
+      return { noMatchTotal, noMatchPending, potentialMatchTotal, othersTotal, othersPending, exactMatchTotal };
+    }
     for (let i = 0; i < cases.length; i++) {
       const c = cases[i];
       const m = caseMatchMap.get(c.caseId);
@@ -1048,12 +1098,16 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       if (m.isNoMatch) {
         noMatchTotal++;
         if (c.action === null) noMatchPending++;
+      } else if (m.hasPotentialMatch) {
+        potentialMatchTotal++;
+      } else {
+        othersTotal++;
+        if (c.action === null) othersPending++;
       }
-      if (m.hasPotentialMatch) potentialMatchTotal++;
       if (m.hasExactMatch) exactMatchTotal++;
     }
-    return { noMatchTotal, noMatchPending, potentialMatchTotal, exactMatchTotal };
-  }, [cases, caseMatchMap]);
+    return { noMatchTotal, noMatchPending, potentialMatchTotal, othersTotal, othersPending, exactMatchTotal };
+  }, [cases, caseMatchMap, matchRulesActive]);
 
   const [savedCommentsList, setSavedCommentsList] = useState<SavedSplCcComment[]>(() => {
     try {
@@ -1103,13 +1157,14 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     };
   }, []);
 
-  // Broadcast live match stats to Settings so Bulk No-Match count stays live
+  // Broadcast live match stats to Settings so Bulk No-Match / Potential / Others counts stay live
   useEffect(() => {
     const payload = {
       totalCases: cases.length,
       noMatchTotal: matchStats.noMatchTotal,
       noMatchPending: matchStats.noMatchPending,
       potentialMatchTotal: matchStats.potentialMatchTotal,
+      othersTotal: matchStats.othersTotal,
       exactMatchTotal: matchStats.exactMatchTotal,
     };
     (window as any).__zymeLiveMatchStats = payload;
@@ -1233,8 +1288,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     
     const streetAll = targetCase.streetAll || streetLines.map(l => l.value).join(', ') || targetCase.street || '';
 
-    const liveMatch = caseMatchMap.get(targetCase.caseId);
-    const resolvedMatch = liveMatch?.matchedKeywordsText || targetCase.matchingName || '';
+    const liveMatch = matchRulesActive ? caseMatchMap.get(targetCase.caseId) : undefined;
+    const liveKeywordsText = liveMatch?.hasExactMatch
+      ? 'Exact match'
+      : liveMatch && liveMatch.matchedKeywords.length > 0
+      ? `${liveMatch.matchedKeywords.join(', ')} (${liveMatch.maxMatchPercent}%)`
+      : '';
+    const resolvedMatch = matchRulesActive
+      ? (liveKeywordsText || targetCase.fileMatchName || targetCase.matchingName || '')
+      : (targetCase.matchingName || '');
 
     setInspectingCustomer({
       name: targetCase.customerName || '',
@@ -1648,6 +1710,8 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           streetDetails: rowStreetDetails,
           matchingName: rawMatch || '',
           matchingNames: rawMatch ? [rawMatch] : [],
+          fileMatchName: rawMatch || '',
+          fileMatchNames: rawMatch ? [rawMatch] : [],
           city: rawCity,
           postalCode: rawPostalCode,
           state: rawState,
@@ -1669,6 +1733,12 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
           if (!currentCase.matchingNames.some(m => m.toLowerCase() === rawMatch.toLowerCase())) {
             currentCase.matchingNames.push(rawMatch);
             currentCase.matchingName = currentCase.matchingNames.join(', ');
+          }
+        }
+        if (rawMatch && currentCase.fileMatchNames) {
+          if (!currentCase.fileMatchNames.some(m => m.toLowerCase() === rawMatch.toLowerCase())) {
+            currentCase.fileMatchNames.push(rawMatch);
+            currentCase.fileMatchName = currentCase.fileMatchNames.join(', ');
           }
         }
       }
@@ -1799,13 +1869,13 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     if (sortOption === 'original') return cases;
 
     const list = [...cases];
-    if (sortOption === 'no-match-first') {
+    if (sortOption === 'no-match-first' && matchRulesActive) {
       const getMatchRank = (caseId: string): number => {
         const m = caseMatchMap.get(caseId);
-        if (!m || m.isNoMatch) return 0; // No matching customers strictly first
+        if (!m || m.isNoMatch) return 0; // Pure No Match (zero RPL match, no Risk/APRV) strictly first
         if (m.hasExactMatch) return 3;
         if (m.hasPotentialMatch) return 2;
-        return 1; // Low/partial match <= threshold
+        return 1; // Others (partial <= threshold or Risk/APRV flagged)
       };
       list.sort((a, b) => {
         const rankA = getMatchRank(a.caseId);
@@ -1840,22 +1910,26 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       });
     }
     return list;
-  }, [cases, sortOption, caseMatchMap]);
+  }, [cases, sortOption, caseMatchMap, matchRulesActive]);
 
   // Filtered cases for sidebar queue based on search & filter mode
   const filteredCases = useMemo(() => {
     return sortedCases.filter(c => {
-      const m = caseMatchMap.get(c.caseId);
+      const m = matchRulesActive ? caseMatchMap.get(c.caseId) : undefined;
       if (filterMode === 'pending' && c.action !== null) return false;
       if (filterMode === 'reviewed' && c.action === null) return false;
-      if (filterMode === 'no-match' && !(m?.isNoMatch ?? true)) return false;
-      if (filterMode === 'potential-match' && !(m?.hasPotentialMatch ?? false)) return false;
+      if (matchRulesActive) {
+        if (filterMode === 'no-match' && !(m?.isNoMatch ?? false)) return false;
+        if (filterMode === 'potential-match' && !(m?.hasPotentialMatch ?? false)) return false;
+        if (filterMode === 'others' && !(m?.isOther ?? false)) return false;
+      }
       if (
         filterMode !== 'all' &&
         filterMode !== 'pending' &&
         filterMode !== 'reviewed' &&
         filterMode !== 'no-match' &&
-        filterMode !== 'potential-match'
+        filterMode !== 'potential-match' &&
+        filterMode !== 'others'
       ) {
         if (c.action !== filterMode) return false;
       }
@@ -1865,7 +1939,9 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         const posnrMatch = c.posnr.toLowerCase().includes(q);
         const nameMatch = c.customerName.toLowerCase().includes(q);
         const countryMatch = c.country.toLowerCase().includes(q);
-        const kwMatch = (m?.matchedKeywordsText || '').toLowerCase().includes(q);
+        const kwMatch = (m?.matchedKeywordsText || '').toLowerCase().includes(q) ||
+          (c.fileMatchName || '').toLowerCase().includes(q) ||
+          (c.matchingName || '').toLowerCase().includes(q);
         const rplMatch = c.rplEntries.some(r => 
           r.rplName.toLowerCase().includes(q) || 
           r.match.toLowerCase().includes(q) ||
@@ -1876,7 +1952,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
       return true;
     });
-  }, [sortedCases, filterMode, searchQuery, caseMatchMap]);
+  }, [sortedCases, filterMode, searchQuery, caseMatchMap, matchRulesActive]);
 
   // Active case resolution
   const activeCase: LiveProcessingCase | undefined = useMemo(() => {
@@ -2265,7 +2341,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setLastBulkAnchorId(caseId);
   };
 
-  const handleSelectCasesPreset = (preset: 'no-match' | 'no-match-pending' | 'filtered' | 'filtered-pending' | 'potential' | 'clear') => {
+  const handleSelectCasesPreset = (preset: 'no-match' | 'no-match-pending' | 'others' | 'others-pending' | 'filtered' | 'filtered-pending' | 'potential' | 'clear') => {
     if (preset === 'clear') {
       setSelectedCaseIds(new Set());
       setLastBulkAnchorId(null);
@@ -2278,6 +2354,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         const m = caseMatchMap.get(c.caseId);
         if (m?.isNoMatch) {
           if (preset === 'no-match-pending' && c.action !== null) continue;
+          next.add(c.caseId);
+        }
+      }
+    } else if (preset === 'others' || preset === 'others-pending') {
+      for (let i = 0; i < cases.length; i++) {
+        const c = cases[i];
+        const m = caseMatchMap.get(c.caseId);
+        if (m?.isOther) {
+          if (preset === 'others-pending' && c.action !== null) continue;
           next.add(c.caseId);
         }
       }
@@ -2299,6 +2384,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   };
 
   const handleQuickOpenBulkNoMatch = () => {
+    if (!matchRulesActive) return;
     setIsSidebarOpen(true);
     setSortOption('no-match-first');
     setFilterMode('no-match');
@@ -2809,7 +2895,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                       title="Sort orders list"
                     >
                       <option value="original">File Order</option>
-                      <option value="no-match-first">No Match First</option>
+                      {matchRulesActive && <option value="no-match-first">No Match First</option>}
                       <option value="customer-asc">Name (A → Z)</option>
                       <option value="customer-desc">Name (Z → A)</option>
                     </select>
@@ -3007,20 +3093,22 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           >
                             File
                           </button>
-                          <button
-                            onClick={() => {
-                              resetScrollToTop();
-                              setSortOption('no-match-first');
-                            }}
-                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
-                              sortOption === 'no-match-first'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'text-slate-600 hover:text-slate-900'
-                            }`}
-                            title="Sort all No Matching customers first"
-                          >
-                            No Match
-                          </button>
+                          {matchRulesActive && (
+                            <button
+                              onClick={() => {
+                                resetScrollToTop();
+                                setSortOption('no-match-first');
+                              }}
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
+                                sortOption === 'no-match-first'
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'text-slate-600 hover:text-slate-900'
+                              }`}
+                              title="Sort pure No Matching customers first (excludes Risk Keywords & APRV Country Codes)"
+                            >
+                              No Match
+                            </button>
+                          )}
                           <button
                             onClick={() => {
                               resetScrollToTop();
@@ -3052,7 +3140,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         </div>
                       </div>
 
-                      {/* Filter Mode Tabs (Row 1: Status, Row 2: Match Category) */}
+                      {/* Filter Mode Tabs (Row 1: Status, Row 2: Match Category when Match Rules ON) */}
                       <div className="space-y-1">
                         <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
                           <button
@@ -3087,70 +3175,94 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           </button>
                         </div>
 
-                        <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
-                          <button
-                            onClick={() => setFilterMode('no-match')}
-                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
-                              filterMode === 'no-match'
-                                ? 'bg-emerald-600 text-white shadow-2xs'
-                                : 'text-emerald-800 hover:bg-emerald-50'
-                            }`}
-                            title="Show only customers with no matching RPL keywords"
-                          >
-                            No Match ({matchStats.noMatchTotal})
-                          </button>
-                          <button
-                            onClick={() => setFilterMode('potential-match')}
-                            className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
-                              filterMode === 'potential-match'
-                                ? 'bg-amber-500 text-white shadow-2xs'
-                                : 'text-amber-900 hover:bg-amber-50'
-                            }`}
-                            title={`Show only Potential Match cases (>${matchConfig.potentialMatchThreshold}%)`}
-                          >
-                            Potential &gt;{matchConfig.potentialMatchThreshold}% ({matchStats.potentialMatchTotal})
-                          </button>
-                        </div>
+                        {matchRulesActive && (
+                          <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
+                            <button
+                              onClick={() => setFilterMode('no-match')}
+                              className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                                filterMode === 'no-match'
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'text-emerald-800 hover:bg-emerald-50'
+                              }`}
+                              title="Only orders with zero RPL ↔ Customer match (Ignored Words exempted) and NO Risk Keywords or APRV Country Codes"
+                            >
+                              No Match ({matchStats.noMatchTotal})
+                            </button>
+                            <button
+                              onClick={() => setFilterMode('potential-match')}
+                              className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                                filterMode === 'potential-match'
+                                  ? 'bg-amber-500 text-white shadow-2xs'
+                                  : 'text-amber-900 hover:bg-amber-50'
+                              }`}
+                              title={`Potential Match cases (>${matchConfig.potentialMatchThreshold}%)`}
+                            >
+                              Potential ({matchStats.potentialMatchTotal})
+                            </button>
+                            <button
+                              onClick={() => setFilterMode('others')}
+                              className={`flex-1 py-1 text-[10px] font-semibold rounded-md transition-colors tabular-nums cursor-pointer ${
+                                filterMode === 'others'
+                                  ? 'bg-indigo-600 text-white shadow-2xs'
+                                  : 'text-indigo-800 hover:bg-indigo-50'
+                              }`}
+                              title="All cases other than No Match and Potential (partial matches, Exact matches, and Risk/APRV flagged orders)"
+                            >
+                              Others ({matchStats.othersTotal})
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Quick Bulk Select Toolbar */}
-                      <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
-                          Bulk Select:
-                        </span>
-                        <div className="flex items-center gap-1 flex-wrap">
-                          <button
-                            type="button"
-                            onClick={() => handleSelectCasesPreset('no-match-pending')}
-                            disabled={matchStats.noMatchTotal === 0}
-                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
-                            title="Select all pending No-Match cases for bulk action"
-                          >
-                            No Match ({matchStats.noMatchPending > 0 ? matchStats.noMatchPending : matchStats.noMatchTotal})
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSelectCasesPreset('filtered')}
-                            disabled={filteredCases.length === 0}
-                            className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
-                            title="Select all cases currently shown by your filter/search"
-                          >
-                            All Shown ({filteredCases.length})
-                          </button>
-                          {selectedCaseIds.size > 0 && (
+                      {/* Quick Bulk Select Toolbar (active only when Match Rules is turned ON in Settings) */}
+                      {matchRulesActive && (
+                        <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-1 flex-wrap">
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500">
+                            Bulk Select:
+                          </span>
+                          <div className="flex items-center gap-1 flex-wrap">
                             <button
                               type="button"
-                              onClick={() => handleSelectCasesPreset('clear')}
-                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors cursor-pointer"
+                              onClick={() => handleSelectCasesPreset('no-match-pending')}
+                              disabled={matchStats.noMatchTotal === 0}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
+                              title="Select all pending No-Match cases (excludes Risk Keywords & APRV codes)"
                             >
-                              Clear
+                              No Match ({matchStats.noMatchPending > 0 ? matchStats.noMatchPending : matchStats.noMatchTotal})
                             </button>
-                          )}
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCasesPreset('others-pending')}
+                              disabled={matchStats.othersTotal === 0}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
+                              title="Select all pending Others cases for bulk decision"
+                            >
+                              Others ({matchStats.othersPending > 0 ? matchStats.othersPending : matchStats.othersTotal})
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectCasesPreset('filtered')}
+                              disabled={filteredCases.length === 0}
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 disabled:opacity-40 transition-colors cursor-pointer tabular-nums"
+                              title="Select all cases currently shown by your filter/search"
+                            >
+                              All Shown ({filteredCases.length})
+                            </button>
+                            {selectedCaseIds.size > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => handleSelectCasesPreset('clear')}
+                                className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition-colors cursor-pointer"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      )}
 
                       {/* Bulk Decision Execution Bar (visible whenever 1+ cases are selected) */}
-                      {selectedCaseIds.size > 0 && (
+                      {matchRulesActive && selectedCaseIds.size > 0 && (
                         <div className="p-2 rounded-xl bg-indigo-50/90 border border-indigo-200 space-y-1.5 shadow-2xs">
                           <div className="flex items-center justify-between text-[11px]">
                             <span className="font-bold text-indigo-950 tabular-nums">
@@ -3235,23 +3347,25 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                 } ${getSidebarItemStyle(c.action, isRedItem, isOrangeItem, isBlueNoAddItem, isSelected)}`}
                               >
                                 <div className="flex items-start gap-2">
-                                  {/* Bulk Selection Checkbox (supports Shift+Click range select) */}
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleToggleCaseSelection(c.caseId, e.shiftKey);
-                                    }}
-                                    className="mt-0.5 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer flex-shrink-0"
-                                    title="Select for bulk decision (Shift+Click to select range)"
-                                    aria-label={`Select case ${c.posnr} for bulk decision`}
-                                  >
-                                    {isChecked ? (
-                                      <CheckSquare size={15} className="text-indigo-600" />
-                                    ) : (
-                                      <Square size={15} />
-                                    )}
-                                  </button>
+                                  {/* Bulk Selection Checkbox (visible when Match Rules is enabled in Settings) */}
+                                  {matchRulesActive && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleToggleCaseSelection(c.caseId, e.shiftKey);
+                                      }}
+                                      className="mt-0.5 text-slate-400 hover:text-indigo-600 transition-colors cursor-pointer flex-shrink-0"
+                                      title="Select for bulk decision (Shift+Click to select range)"
+                                      aria-label={`Select case ${c.posnr} for bulk decision`}
+                                    >
+                                      {isChecked ? (
+                                        <CheckSquare size={15} className="text-indigo-600" />
+                                      ) : (
+                                        <Square size={15} />
+                                      )}
+                                    </button>
+                                  )}
 
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center justify-between gap-1 mb-0.5">
@@ -3315,35 +3429,52 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                       {c.customerName || <span className="italic text-slate-400 font-normal">[No Customer Name]</span>}
                                     </p>
 
-                                    {/* Matching Keywords & Potential Match Status inside Show List */}
-                                    <div className="mt-1 flex items-center gap-1 flex-wrap">
-                                      {matchInfo?.hasExactMatch ? (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-red-100 text-red-700 border border-red-200">
-                                          Exact Match
-                                        </span>
-                                      ) : matchInfo?.hasPotentialMatch ? (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-300 tabular-nums">
-                                          Potential {matchInfo.maxMatchPercent}%
-                                        </span>
-                                      ) : matchInfo?.isNoMatch ? (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                          No Match
-                                        </span>
-                                      ) : (
-                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 tabular-nums">
-                                          {matchInfo?.maxMatchPercent ?? 0}%
-                                        </span>
-                                      )}
+                                    {/* Matching Keywords & Potential Match Status inside Show List (when Match Rules ON) */}
+                                    {matchRulesActive && (
+                                      <div className="mt-1 flex items-center gap-1 flex-wrap">
+                                        {matchInfo?.hasExactMatch ? (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-red-100 text-red-700 border border-red-200">
+                                            Exact Match
+                                          </span>
+                                        ) : matchInfo?.hasPotentialMatch ? (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-900 border border-amber-300 tabular-nums">
+                                            Potential {matchInfo.maxMatchPercent}%
+                                          </span>
+                                        ) : matchInfo?.isNoMatch ? (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            No Match
+                                          </span>
+                                        ) : matchInfo && matchInfo.maxMatchPercent === 0 && (matchInfo.hasRiskKeyword || matchInfo.hasAprvCountry) ? (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                            {matchInfo.hasAprvCountry && matchInfo.hasRiskKeyword
+                                              ? 'Risk & APRV'
+                                              : matchInfo.hasAprvCountry
+                                              ? 'APRV Country'
+                                              : 'Risk Keyword'}
+                                          </span>
+                                        ) : (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 tabular-nums">
+                                            {matchInfo?.maxMatchPercent ?? 0}%
+                                          </span>
+                                        )}
 
-                                      {matchInfo && matchInfo.matchedKeywords.length > 0 && (
-                                        <span
-                                          className="text-[10px] font-semibold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-1.5 py-0.2 rounded truncate max-w-[180px]"
-                                          title={`Matching keywords: ${matchInfo.matchedKeywords.join(', ')}`}
-                                        >
-                                          {matchInfo.matchedKeywords.join(', ')}
-                                        </span>
-                                      )}
-                                    </div>
+                                        {matchInfo && matchInfo.matchedKeywords.length > 0 ? (
+                                          <span
+                                            className="text-[10px] font-semibold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-1.5 py-0.2 rounded truncate max-w-[180px]"
+                                            title={`Matching name: ${matchInfo.matchedKeywords.join(', ')}`}
+                                          >
+                                            {matchInfo.matchedKeywords.join(', ')}
+                                          </span>
+                                        ) : c.fileMatchName ? (
+                                          <span
+                                            className="text-[10px] font-semibold text-indigo-700 bg-indigo-50/80 border border-indigo-100 px-1.5 py-0.2 rounded truncate max-w-[180px]"
+                                            title={`Matching name: ${c.fileMatchName}`}
+                                          >
+                                            {c.fileMatchName}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    )}
 
                                     <div className="flex items-center justify-between text-[10px] text-slate-400 mt-0.5 tabular-nums">
                                       <span>{c.rplEntries.length} RPL {c.rplEntries.length === 1 ? 'Hit' : 'Hits'}</span>
@@ -3463,7 +3594,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   </div>
 
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    {activeMatchSummary?.hasPotentialMatch && !activeMatchSummary.hasExactMatch && (
+                                    {matchRulesActive && activeMatchSummary?.hasPotentialMatch && !activeMatchSummary.hasExactMatch && (
                                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-black tracking-wide bg-amber-500 text-white shadow-2xs tabular-nums">
                                         <AlertCircle size={11} className="text-white" />
                                         Potential Match ({activeMatchSummary.maxMatchPercent}%)
@@ -3568,33 +3699,85 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                       </span>
                                     </div>
                                   )}
-                                  <div className="text-xs flex items-start gap-1.5 flex-wrap pt-0.5">
-                                    <span className={`${boxTheme.subLabelClass} flex-shrink-0`}>Matching Name:</span>
-                                    {activeMatchSummary?.hasExactMatch ? (
-                                      <span className="font-bold break-words select-text text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200">
-                                        Exact match
-                                      </span>
-                                    ) : activeMatchSummary && activeMatchSummary.matchedKeywords.length > 0 ? (
-                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                        <span className={`font-semibold break-words select-text px-1.5 py-0.5 rounded border ${
-                                          activeMatchSummary.hasPotentialMatch
-                                            ? 'text-amber-950 bg-amber-100/90 border-amber-300 font-bold'
-                                            : 'text-indigo-800 bg-indigo-50/90 border-indigo-200'
-                                        }`}>
-                                          {activeMatchSummary.matchedKeywords.join(', ')}
+                                  {matchRulesActive ? (
+                                    <div className="text-xs flex items-start gap-1.5 flex-wrap pt-0.5">
+                                      <span className={`${boxTheme.subLabelClass} flex-shrink-0`}>Matching Name:</span>
+                                      {activeMatchSummary?.hasExactMatch ? (
+                                        <span className="font-bold break-words select-text text-red-700 bg-red-100/90 px-1.5 py-0.5 rounded border border-red-200">
+                                          Exact match
                                         </span>
-                                        {activeMatchSummary.hasPotentialMatch && (
-                                          <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white tabular-nums">
-                                            Potential Match • {activeMatchSummary.maxMatchPercent}%
+                                      ) : activeMatchSummary && activeMatchSummary.matchedKeywords.length > 0 ? (
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className={`font-semibold break-words select-text px-1.5 py-0.5 rounded border ${
+                                            activeMatchSummary.hasPotentialMatch
+                                              ? 'text-amber-950 bg-amber-100/90 border-amber-300 font-bold'
+                                              : 'text-indigo-800 bg-indigo-50/90 border-indigo-200'
+                                          }`}>
+                                            {activeMatchSummary.matchedKeywords.join(', ')}
                                           </span>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <span className="font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                        No Match
+                                          {activeMatchSummary.hasPotentialMatch ? (
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-amber-500 text-white tabular-nums">
+                                              Potential Match • {activeMatchSummary.maxMatchPercent}%
+                                            </span>
+                                          ) : (
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200 tabular-nums">
+                                              {activeMatchSummary.maxMatchPercent}% Match
+                                            </span>
+                                          )}
+                                          {activeCase.fileMatchName &&
+                                            !activeMatchSummary.matchedKeywords.some(k =>
+                                              activeCase.fileMatchName!.toLowerCase().includes(k.toLowerCase())
+                                            ) && (
+                                              <span
+                                                className="font-medium break-words select-text px-1.5 py-0.5 rounded border text-slate-700 bg-slate-100 border-slate-200 text-[11px]"
+                                                title="Additional match data from uploaded file"
+                                              >
+                                                {activeCase.fileMatchName}
+                                              </span>
+                                            )}
+                                        </div>
+                                      ) : activeCase.fileMatchName ? (
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="font-semibold break-words select-text px-1.5 py-0.5 rounded border text-indigo-800 bg-indigo-50/90 border-indigo-200">
+                                            {activeCase.fileMatchName}
+                                          </span>
+                                          {activeMatchSummary?.hasRiskKeyword && (
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                                              Risk Keyword
+                                            </span>
+                                          )}
+                                          {activeMatchSummary?.hasAprvCountry && (
+                                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
+                                              APRV Country
+                                            </span>
+                                          )}
+                                        </div>
+                                      ) : activeMatchSummary && (activeMatchSummary.hasRiskKeyword || activeMatchSummary.hasAprvCountry) ? (
+                                        <span className="font-semibold text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">
+                                          {activeMatchSummary.hasAprvCountry && activeMatchSummary.hasRiskKeyword
+                                            ? 'Excluded from No Match (Risk Keyword & APRV Country)'
+                                            : activeMatchSummary.hasAprvCountry
+                                            ? 'Excluded from No Match (APRV Country Code)'
+                                            : 'Excluded from No Match (Risk Keyword)'}
+                                        </span>
+                                      ) : (
+                                        <span className="font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                          No Match
+                                        </span>
+                                      )}
+                                    </div>
+                                  ) : activeCase.matchingName ? (
+                                    <div className="text-xs flex items-start gap-1.5 flex-wrap pt-0.5">
+                                      <span className={`${boxTheme.subLabelClass} flex-shrink-0`}>Matching Name:</span>
+                                      <span className={`font-semibold break-words select-text px-1.5 py-0.5 rounded border ${
+                                        activeCase.matchingName.toLowerCase().includes('exact match')
+                                          ? 'text-red-700 bg-red-100/90 border-red-200 font-bold'
+                                          : 'text-indigo-800 bg-indigo-50/90 border-indigo-200'
+                                      }`}>
+                                        {activeCase.matchingName}
                                       </span>
-                                    )}
-                                  </div>
+                                    </div>
+                                  ) : null}
                                 </div>
 
                               </div>
@@ -3709,7 +3892,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   {exactMatchCount} exact {exactMatchCount === 1 ? 'match' : 'matches'}
                                 </span>
                               )}
-                              {(caseMatchMap.get(activeCase.caseId)?.potentialMatchCount ?? 0) > 0 && (
+                              {matchRulesActive && (caseMatchMap.get(activeCase.caseId)?.potentialMatchCount ?? 0) > 0 && (
                                 <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 tabular-nums">
                                   {caseMatchMap.get(activeCase.caseId)?.potentialMatchCount} potential (&gt;{matchConfig.potentialMatchThreshold}%)
                                 </span>
@@ -3778,8 +3961,10 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             ) : (
                               displayedRplEntries.map((rpl, idx) => {
                                 const isExact = isExact100Match(activeCase.customerName, rpl.rplName);
-                                const rplEval = caseMatchMap.get(activeCase.caseId)?.rplResultsByRow.get(rpl.rowIndex);
-                                const isPotential = !isExact && Boolean(rplEval?.isPotentialMatch);
+                                const rplEval = matchRulesActive
+                                  ? caseMatchMap.get(activeCase.caseId)?.rplResultsByRow.get(rpl.rowIndex)
+                                  : undefined;
+                                const isPotential = matchRulesActive && !isExact && Boolean(rplEval?.isPotentialMatch);
                                 return (
                                   <div 
                                     key={idx}
@@ -3852,18 +4037,46 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                           Exact match found
                                         </span>
                                       ) : isPotential ? (
-                                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-500 text-white shadow-xs flex-shrink-0 tabular-nums">
-                                          <AlertCircle size={11} className="text-white" />
-                                          Potential match • {rplEval?.matchPercent}%
-                                        </span>
+                                        <>
+                                          {rplEval && rplEval.matchedKeywords.length > 0 && (
+                                            <span
+                                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border max-w-[160px] truncate ${
+                                                uiPreset === 'focus'
+                                                  ? 'bg-amber-950/60 text-amber-200 border-amber-700/70'
+                                                  : 'bg-amber-50 text-amber-900 border-amber-200'
+                                              }`}
+                                              title={`Matching name: ${rplEval.matchedKeywords.join(', ')}`}
+                                            >
+                                              {rplEval.matchedKeywords.join(', ')}
+                                            </span>
+                                          )}
+                                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-amber-500 text-white shadow-xs flex-shrink-0 tabular-nums">
+                                            <AlertCircle size={11} className="text-white" />
+                                            Potential match • {rplEval?.matchPercent}%
+                                          </span>
+                                        </>
                                       ) : rplEval && rplEval.matchPercent > 0 ? (
-                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tabular-nums border ${
-                                          uiPreset === 'focus'
-                                            ? 'bg-slate-700/80 text-slate-300 border-slate-600'
-                                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                                        }`}>
-                                          {rplEval.matchPercent}%
-                                        </span>
+                                        <>
+                                          {rplEval.matchedKeywords.length > 0 && (
+                                            <span
+                                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold border max-w-[180px] truncate ${
+                                                uiPreset === 'focus'
+                                                  ? 'bg-indigo-950/70 text-indigo-200 border-indigo-700/70'
+                                                  : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                              }`}
+                                              title={`Matching name: ${rplEval.matchedKeywords.join(', ')}`}
+                                            >
+                                              {rplEval.matchedKeywords.join(', ')}
+                                            </span>
+                                          )}
+                                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold tabular-nums border ${
+                                            uiPreset === 'focus'
+                                              ? 'bg-slate-700/80 text-slate-300 border-slate-600'
+                                              : 'bg-slate-100 text-slate-600 border-slate-200'
+                                          }`}>
+                                            {rplEval.matchPercent}%
+                                          </span>
+                                        </>
                                       ) : null}
                                     </div>
                                   </div>
