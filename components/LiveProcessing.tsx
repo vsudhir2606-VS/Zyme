@@ -59,6 +59,7 @@ import {
 import {
   MatchEngineConfig,
   CaseMatchSummary,
+  SplitDeferredStatus,
   DEFAULT_IGNORED_WORDS,
   DEFAULT_MATCH_ENGINE_CONFIG,
   DEFAULT_HIGH_RISK_KEYWORDS,
@@ -69,6 +70,7 @@ import {
   compileIgnoreLookup,
   compileRiskAndAprvMatcher,
   evaluateCaseMatches,
+  evaluateSplitDeferredStatus,
 } from '../utils/liveMatchEngine.ts';
 import { 
   saveSplCcComment, 
@@ -77,7 +79,7 @@ import {
   SavedSplCcComment 
 } from '../utils/splCcStorage.ts';
 
-export type LiveSortOption = 'original' | 'no-match-first' | 'customer-asc' | 'customer-desc';
+export type LiveSortOption = 'original' | 'split' | 'no-match-first' | 'customer-asc' | 'customer-desc';
 
 export type LiveUiPreset = 'modern' | 'compact' | 'focus' | 'auditor';
 
@@ -131,13 +133,7 @@ export const LIVE_UI_PRESETS: UiPresetOption[] = [
 ];
 
 export type LiveActionType = 
-  | 'SPLF'
-  | 'SPLF DC'
-  | 'SPLF CC'
-  | 'SPLF Ind'
-  | 'SPLF I vs D'
-  | 'SPLF(CC)'
-  | 'No add'
+  | 'SPLF/APRV'
   | 'SPLE'
   | 'ZKWD'
   | 'EMBF'
@@ -164,69 +160,21 @@ export interface ActionButtonDef {
 
 export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
-    key: 'SPLF',
-    label: 'SPLF',
+    key: 'SPLF/APRV',
+    label: 'SPLF/APRV',
     shortcut: '1',
-    description: 'False match',
+    description: 'False match / APRV',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
       normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
       active: 'bg-green-600 text-white border-green-700 ring-2 ring-green-300 shadow-sm',
       dot: 'bg-green-500',
-    },
-  },
-  {
-    key: 'SPLF DC',
-    label: 'SPLF DC',
-    shortcut: '2',
-    description: 'SPLF Different Country / Entity',
-    colorTheme: {
-      badge: 'bg-teal-100 text-teal-900 border-teal-300 font-bold',
-      normal: 'hover:border-teal-500 hover:bg-teal-50 text-teal-900 border-teal-300 bg-teal-50/40',
-      active: 'bg-teal-600 text-white border-teal-700 ring-2 ring-teal-300 shadow-sm',
-      dot: 'bg-teal-500',
-    },
-  },
-  {
-    key: 'SPLF CC',
-    label: 'SPLF CC',
-    shortcut: '3',
-    description: 'Comprehensive comment (Customer and RPL are different)',
-    colorTheme: {
-      badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
-      normal: 'hover:border-green-500 hover:bg-green-50 text-green-900 border-green-300 bg-green-50/40',
-      active: 'bg-green-600 text-white border-green-700 ring-2 ring-green-300 shadow-sm',
-      dot: 'bg-green-500',
-    },
-  },
-  {
-    key: 'SPLF Ind',
-    label: 'SPLF Ind',
-    shortcut: '4',
-    description: 'SPLF Individual vs Denial',
-    colorTheme: {
-      badge: 'bg-emerald-100 text-emerald-900 border-emerald-300 font-bold',
-      normal: 'hover:border-emerald-500 hover:bg-emerald-50 text-emerald-900 border-emerald-300 bg-emerald-50/40',
-      active: 'bg-emerald-600 text-white border-emerald-700 ring-2 ring-emerald-300 shadow-sm',
-      dot: 'bg-emerald-500',
-    },
-  },
-  {
-    key: 'No add',
-    label: 'No add',
-    shortcut: '5',
-    description: 'No Address / Cleared',
-    colorTheme: {
-      badge: 'bg-blue-100 text-blue-900 border-blue-300 font-bold',
-      normal: 'hover:border-blue-500 hover:bg-blue-50 text-blue-900 border-blue-300 bg-blue-50/40',
-      active: 'bg-blue-600 text-white border-blue-700 ring-2 ring-blue-300 shadow-sm',
-      dot: 'bg-blue-500',
     },
   },
   {
     key: 'SPLE',
     label: 'SPLE',
-    shortcut: '6',
+    shortcut: '2',
     description: 'Exemption',
     colorTheme: {
       badge: 'bg-green-100 text-green-900 border-green-300 font-bold',
@@ -238,7 +186,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'ZKWD',
     label: 'ZKWD',
-    shortcut: '7',
+    shortcut: '3',
     description: 'Keyword Match Review',
     colorTheme: {
       badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
@@ -250,7 +198,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'EMBF',
     label: 'EMBF',
-    shortcut: '8',
+    shortcut: '4',
     description: 'Embargo Found',
     colorTheme: {
       badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
@@ -262,7 +210,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'EMBN',
     label: 'EMBN',
-    shortcut: '9',
+    shortcut: '5',
     description: 'Embassy, consulate army in ZEMB',
     colorTheme: {
       badge: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
@@ -286,7 +234,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'CN',
     label: 'CN',
-    shortcut: '',
+    shortcut: '6',
     description: 'Country Notification',
     colorTheme: {
       badge: 'bg-slate-200 text-slate-800 border-slate-300 font-bold',
@@ -298,7 +246,7 @@ export const ACTION_BUTTON_CONFIG: ActionButtonDef[] = [
   {
     key: 'BLOC',
     label: 'BLOC',
-    shortcut: '',
+    shortcut: '7',
     description: 'Blocked Transaction',
     colorTheme: {
       badge: 'bg-rose-100 text-rose-900 border-rose-300 font-bold',
@@ -494,15 +442,8 @@ export const getCustomerBoxTheme = (
   status?: string,
   isNoAddFlag?: boolean
 ) => {
-  // SPLF, SPLF I vs D, SPLF DC, SPLF CC, SPLE: green color and customer name box animates green
-  if (
-    action === 'SPLF' || 
-    action === 'SPLF I vs D' || 
-    action === 'SPLF DC' || 
-    action === 'SPLF CC' || 
-    action === 'SPLF(CC)' || 
-    action === 'SPLE'
-  ) {
+  // SPLF/APRV and SPLE: green color and customer name box animates green
+  if (action === 'SPLF/APRV' || action === 'SPLE') {
     return {
       type: 'green' as const,
       containerClass: 'border-2 border-green-500 bg-green-50/95 shadow-md ring-2 ring-green-400/50 animate-green-pulse',
@@ -522,30 +463,6 @@ export const getCustomerBoxTheme = (
       countryPinClass: 'text-green-600',
       actionLabelClass: 'text-green-700',
       actionBorderClass: 'border-green-200/80',
-    };
-  }
-
-  // No add action: blue color
-  if (action === 'No add') {
-    return {
-      type: 'blue' as const,
-      containerClass: 'border-2 border-blue-500 bg-blue-50/95 shadow-md ring-2 ring-blue-300/60',
-      posnrClass: 'bg-blue-600',
-      badge: {
-        text: 'No add',
-        className: 'bg-blue-600 text-white shadow-2xs',
-        isAlert: false,
-      },
-      nameCardClass: 'p-3.5 rounded-xl bg-blue-100/85 border border-blue-300 shadow-2xs',
-      labelClass: 'text-blue-800 font-extrabold',
-      nameClass: 'text-blue-950 font-black',
-      statusBadgeClass: 'bg-blue-600 text-white border-blue-700 font-black',
-      subBorderClass: 'border-blue-200/80 text-blue-900/80',
-      subLabelClass: 'text-blue-700/80 font-medium',
-      countryBadgeClass: 'bg-blue-100 text-blue-900 border border-blue-200',
-      countryPinClass: 'text-blue-600',
-      actionLabelClass: 'text-blue-700',
-      actionBorderClass: 'border-blue-200/80',
     };
   }
 
@@ -820,22 +737,10 @@ export const getSidebarItemStyle = (
   isBlueNoAddItem: boolean,
   isSelected: boolean
 ) => {
-  if (
-    action === 'SPLF' || 
-    action === 'SPLF I vs D' || 
-    action === 'SPLF DC' || 
-    action === 'SPLF CC' || 
-    action === 'SPLF(CC)' || 
-    action === 'SPLE'
-  ) {
+  if (action === 'SPLF/APRV' || action === 'SPLE') {
     return isSelected 
       ? 'bg-green-100/80 border-l-green-600 shadow-2xs' 
       : 'border-l-green-500 bg-green-50/40 hover:bg-green-100/40';
-  }
-  if (action === 'No add') {
-    return isSelected 
-      ? 'bg-blue-100/80 border-l-blue-600 shadow-2xs' 
-      : 'border-l-blue-500 bg-blue-50/40 hover:bg-blue-100/40';
   }
   if (action === 'ZKWD' || action === 'EMBF' || action === 'EMBN') {
     return isSelected 
@@ -948,7 +853,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   // Bulk Selection & Bulk Decision states (Show List + Quick Bulk No-Match)
   const [selectedCaseIds, setSelectedCaseIds] = useState<Set<string>>(() => new Set());
   const [lastBulkAnchorId, setLastBulkAnchorId] = useState<string | null>(null);
-  const [bulkActionChoice, setBulkActionChoice] = useState<LiveActionType | '__CLEAR__'>('SPLF');
+  const [bulkActionChoice, setBulkActionChoice] = useState<LiveActionType | '__CLEAR__'>('SPLF/APRV');
   const [bulkCommentText, setBulkCommentText] = useState('');
   const [bulkSkipReviewed, setBulkSkipReviewed] = useState(true);
   const [bulkNotice, setBulkNotice] = useState<{
@@ -1687,13 +1592,17 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         let initialAction: LiveActionType | null = null;
         if (rawExistingAction) {
           const cleanAct = rawExistingAction.toLowerCase().replace(/[^a-z0-9]/g, '');
-          const matchedAct = ACTION_BUTTON_CONFIG.find(a => {
-            const cleanKey = a.key.toLowerCase().replace(/[^a-z0-9]/g, '');
-            const cleanLabel = a.label.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return cleanKey === cleanAct || cleanLabel === cleanAct || a.key.toLowerCase() === rawExistingAction.toLowerCase();
-          });
-          if (matchedAct) {
-            initialAction = matchedAct.key;
+          if (cleanAct === 'splf' || cleanAct === 'splfaprv') {
+            initialAction = 'SPLF/APRV';
+          } else {
+            const matchedAct = ACTION_BUTTON_CONFIG.find(a => {
+              const cleanKey = a.key.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const cleanLabel = a.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+              return cleanKey === cleanAct || cleanLabel === cleanAct || a.key.toLowerCase() === rawExistingAction.toLowerCase();
+            });
+            if (matchedAct) {
+              initialAction = matchedAct.key;
+            }
           }
         }
 
@@ -1864,12 +1773,38 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   };
 
-  // Sorted cases according to sortOption (Original file order, No Match First, Alphabetical A-Z, Z-A)
+  // Precompute Split sort flags (ZKWD, ZEMB, APRV, High Risk orders pushed to END)
+  const caseSplitMeta = useMemo(() => {
+    const map = new Map<string, SplitDeferredStatus>();
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      map.set(
+        c.caseId,
+        evaluateSplitDeferredStatus(
+          c.customerName,
+          c.country,
+          c.status,
+          c.rplEntries,
+          compiledRiskAprvMatcher
+        )
+      );
+    }
+    return map;
+  }, [cases, compiledRiskAprvMatcher]);
+
+  // Sorted cases according to sortOption (Original, Split, No Match First, Alphabetical A-Z, Z-A)
   const sortedCases = useMemo(() => {
     if (sortOption === 'original') return cases;
 
     const list = [...cases];
-    if (sortOption === 'no-match-first' && matchRulesActive) {
+    if (sortOption === 'split') {
+      list.sort((a, b) => {
+        const endA = caseSplitMeta.get(a.caseId)?.isDeferred ? 1 : 0;
+        const endB = caseSplitMeta.get(b.caseId)?.isDeferred ? 1 : 0;
+        if (endA !== endB) return endA - endB;
+        return a.caseNumber - b.caseNumber;
+      });
+    } else if (sortOption === 'no-match-first' && matchRulesActive) {
       const getMatchRank = (caseId: string): number => {
         const m = caseMatchMap.get(caseId);
         if (!m || m.isNoMatch) return 0; // Pure No Match (zero RPL match, no Risk/APRV) strictly first
@@ -1910,7 +1845,23 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
       });
     }
     return list;
-  }, [cases, sortOption, caseMatchMap, matchRulesActive]);
+  }, [cases, sortOption, caseMatchMap, caseSplitMeta, matchRulesActive]);
+
+  const handleSelectSortOption = (nextSort: LiveSortOption) => {
+    resetScrollToTop();
+    setSortOption(nextSort);
+    if (nextSort === 'split' && cases.length > 0) {
+      const currentIsDeferred = activeCaseId ? (caseSplitMeta.get(activeCaseId)?.isDeferred ?? false) : true;
+      if (currentIsDeferred) {
+        const firstNormalPending = cases.find(c => !(caseSplitMeta.get(c.caseId)?.isDeferred) && c.action === null);
+        const firstNormal = cases.find(c => !(caseSplitMeta.get(c.caseId)?.isDeferred));
+        const target = firstNormalPending || firstNormal;
+        if (target) {
+          setActiveCaseId(target.caseId);
+        }
+      }
+    }
+  };
 
   // Filtered cases for sidebar queue based on search & filter mode
   const filteredCases = useMemo(() => {
@@ -2197,7 +2148,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     }
   };
 
-  // Apply matched comment, automatically mark as SPLF CC, and immediately change to next order
+  // Apply matched comment, automatically mark as SPLF/APRV, and immediately change to next order
   const handleInsertMatchAndNext = () => {
     if (!activeCase || !matchedSavedComment) return;
     const targetCaseId = activeCase.caseId;
@@ -2219,15 +2170,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
     setCaseNote(commentText);
     persistCaseComment(commentText, activeCase, true);
 
-    // 3. Mark as SPLF CC with comment & timestamp
+    // 3. Mark as SPLF/APRV with comment & timestamp
     setCases(prev => prev.map(c => c.caseId === targetCaseId ? {
       ...c,
-      action: 'SPLF CC',
+      action: 'SPLF/APRV',
       notes: commentText,
       actionTimestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
     } : c));
 
-    setSplCcSaveNotice('Marked as SPL CC with matched comment & changed to next!');
+    setSplCcSaveNotice('Marked as SPLF/APRV with matched comment & changed to next!');
     setTimeout(() => setSplCcSaveNotice(null), 3000);
 
     // 4. Immediately advance to next order
@@ -2241,19 +2192,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
   const handleApplyAction = (actionKey: LiveActionType) => {
     if (!activeCase) return;
     const targetCaseId = activeCase.caseId;
-
-    const isSplfCc = actionKey === 'SPLF CC' || actionKey === 'SPLF(CC)';
-    let noteToApply = caseNote;
-
-    if (isSplfCc) {
-      if (matchedSavedComment && (!caseNote || !caseNote.trim() || caseNote === SPLF_CC_DEFAULT_TEXT)) {
-        noteToApply = matchedSavedComment.comments;
-      } else if (!caseNote || !caseNote.trim() || !caseNote.includes('Customer and RPL are different')) {
-        noteToApply = SPLF_CC_DEFAULT_TEXT;
-      }
-      setCaseNote(noteToApply);
-      persistCaseComment(noteToApply, activeCase, true);
-    }
+    const noteToApply = caseNote;
 
     // Pre-calculate next case ID for autoAdvance before mutating cases state
     const curIdx = navigationList.findIndex(c => c.caseId === targetCaseId);
@@ -2274,23 +2213,6 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
         return c;
       });
     });
-
-    if (isSplfCc) {
-      // Focus comment box immediately so user can add more text to it
-      setTimeout(() => {
-        if (commentInputRef.current) {
-          commentInputRef.current.focus();
-          const targetIndex = noteToApply.indexOf('customer - ');
-          if (targetIndex !== -1) {
-            const cursorTarget = targetIndex + 'customer - '.length;
-            commentInputRef.current.setSelectionRange(cursorTarget, cursorTarget);
-          } else {
-            commentInputRef.current.setSelectionRange(noteToApply.length, noteToApply.length);
-          }
-        }
-      }, 50);
-      return; // Do not auto-advance away
-    }
 
     if (autoAdvance && targetNextId) {
       setTimeout(() => {
@@ -2879,29 +2801,31 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
 
                   {/* Header Sort Option Dropdown (Ultra Compact) */}
                   <div className={`hidden md:flex items-center gap-1 rounded-md px-1.5 py-0.5 border shadow-2xs transition-all ${
-                    sortOption !== 'original' 
-                      ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' 
-                      : 'bg-white border-slate-300 hover:border-slate-400'
+                    sortOption === 'split'
+                      ? 'bg-amber-50 border-amber-300 ring-1 ring-amber-200'
+                      : sortOption !== 'original' 
+                        ? 'bg-indigo-50 border-indigo-300 ring-1 ring-indigo-200' 
+                        : 'bg-white border-slate-300 hover:border-slate-400'
                   }`}>
-                    <ArrowDownAZ size={11} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                    <ArrowDownAZ size={11} className={sortOption === 'split' ? "text-amber-600" : sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
                     <span className="text-[9px] font-bold uppercase text-slate-500">Sort:</span>
                     <select
                       value={sortOption}
-                      onChange={(e) => {
-                        resetScrollToTop();
-                        setSortOption(e.target.value as LiveSortOption);
-                      }}
+                      onChange={(e) => handleSelectSortOption(e.target.value as LiveSortOption)}
                       className="bg-transparent text-[10px] font-semibold text-slate-700 focus:outline-none cursor-pointer pr-0.5 py-0"
-                      title="Sort orders list"
+                      title="Sort orders list (Split places ZKWD, ZEMB, APRV & High Risk orders at the end)"
                     >
                       <option value="original">File Order</option>
+                      <option value="split">Split</option>
                       {matchRulesActive && <option value="no-match-first">No Match First</option>}
                       <option value="customer-asc">Name (A → Z)</option>
                       <option value="customer-desc">Name (Z → A)</option>
                     </select>
                     {sortOption !== 'original' && (
-                      <span className="px-1 py-0 rounded text-[8px] font-black uppercase bg-indigo-600 text-white leading-tight">
-                        {sortOption === 'no-match-first' ? 'NO MATCH' : sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
+                      <span className={`px-1 py-0 rounded text-[8px] font-black uppercase text-white leading-tight ${
+                        sortOption === 'split' ? 'bg-amber-600' : 'bg-indigo-600'
+                      }`}>
+                        {sortOption === 'split' ? 'SPLIT' : sortOption === 'no-match-first' ? 'NO MATCH' : sortOption === 'customer-asc' ? 'A-Z' : 'Z-A'}
                       </span>
                     )}
                   </div>
@@ -3072,18 +2996,15 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         )}
                       </div>
 
-                      {/* Sort Orders Row (File, No Match First, A-Z, Z-A) */}
+                      {/* Sort Orders Row (File, Split, No Match First, A-Z, Z-A) */}
                       <div className="flex items-center justify-between gap-1 px-1.5 py-0.5 bg-slate-50 rounded border border-slate-200/80">
                         <span className="text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-0.5 flex-shrink-0">
-                          <ArrowDownAZ size={10} className={sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
+                          <ArrowDownAZ size={10} className={sortOption === 'split' ? "text-amber-600" : sortOption !== 'original' ? "text-indigo-600" : "text-slate-400"} />
                           Sort:
                         </span>
-                        <div className="flex items-center gap-0.5 bg-slate-200/70 p-0.5 rounded">
+                        <div className="flex items-center gap-0.5 bg-slate-200/70 p-0.5 rounded flex-wrap justify-end">
                           <button
-                            onClick={() => {
-                              resetScrollToTop();
-                              setSortOption('original');
-                            }}
+                            onClick={() => handleSelectSortOption('original')}
                             className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'original'
                                 ? 'bg-white text-slate-900 shadow-2xs'
@@ -3093,12 +3014,20 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           >
                             File
                           </button>
+                          <button
+                            onClick={() => handleSelectSortOption('split')}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
+                              sortOption === 'split'
+                                ? 'bg-amber-600 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                            title="Split: Show normal orders first, and ZKWD, ZEMB, APRV & High Risk orders at the end"
+                          >
+                            Split
+                          </button>
                           {matchRulesActive && (
                             <button
-                              onClick={() => {
-                                resetScrollToTop();
-                                setSortOption('no-match-first');
-                              }}
+                              onClick={() => handleSelectSortOption('no-match-first')}
                               className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                                 sortOption === 'no-match-first'
                                   ? 'bg-emerald-600 text-white shadow-2xs'
@@ -3110,10 +3039,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             </button>
                           )}
                           <button
-                            onClick={() => {
-                              resetScrollToTop();
-                              setSortOption('customer-asc');
-                            }}
+                            onClick={() => handleSelectSortOption('customer-asc')}
                             className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'customer-asc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
@@ -3124,10 +3050,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             A-Z
                           </button>
                           <button
-                            onClick={() => {
-                              resetScrollToTop();
-                              setSortOption('customer-desc');
-                            }}
+                            onClick={() => handleSelectSortOption('customer-desc')}
                             className={`px-1.5 py-0.5 rounded text-[9px] font-semibold transition-all leading-tight cursor-pointer ${
                               sortOption === 'customer-desc'
                                 ? 'bg-indigo-600 text-white shadow-2xs'
@@ -3334,6 +3257,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             const isChecked = selectedCaseIds.has(c.caseId);
                             const meta = caseAlertMeta.get(c.caseId);
                             const matchInfo = caseMatchMap.get(c.caseId);
+                            const splitInfo = caseSplitMeta.get(c.caseId);
                             const isRedItem = meta?.isRed ?? false;
                             const isOrangeItem = meta?.isOrange ?? false;
                             const isBlueNoAddItem = meta?.isBlueNoAdd ?? false;
@@ -3390,6 +3314,26 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                         {isOrangeItem && (
                                           <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
                                             {meta?.orangeLabel}
+                                          </span>
+                                        )}
+                                        {!isRedItem && splitInfo?.hasAprv && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-red-600 text-white">
+                                            APRV
+                                          </span>
+                                        )}
+                                        {!isOrangeItem && splitInfo?.hasZkwd && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
+                                            ZKWD
+                                          </span>
+                                        )}
+                                        {!isOrangeItem && splitInfo?.hasZemb && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-orange-500 text-white">
+                                            ZEMB
+                                          </span>
+                                        )}
+                                        {splitInfo?.hasHighRisk && (
+                                          <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-amber-600 text-white">
+                                            High Risk
                                           </span>
                                         )}
                                         {isBlueNoAddItem && (
@@ -4115,7 +4059,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                           )}
                         </div>
 
-                        <div className="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-8 lg:grid-cols-8 gap-1.5 sm:gap-2">
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-6 gap-1.5 sm:gap-2">
                           {ACTION_BUTTON_CONFIG.map(btn => {
                             const isSelected = activeCase.action === btn.key;
                             return (
@@ -4138,7 +4082,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                   {btn.description}
                                 </span>
 
-                                {btn.key === 'SPLF CC' && matchedSavedComment && (
+                                {btn.key === 'SPLF/APRV' && matchedSavedComment && (
                                   <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full text-[8px] font-black bg-emerald-500 text-white uppercase shadow-xs flex items-center gap-0.5 tracking-wider pointer-events-none">
                                     Match
                                   </span>
@@ -4163,11 +4107,6 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                             <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
                               Comment
                             </span>
-                            {activeCase.action === 'SPLF CC' && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-100 text-green-800 border border-green-200">
-                                SPLF CC Active
-                              </span>
-                            )}
                             {matchedSavedComment && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-200 shadow-2xs">
                                 <Sparkles size={11} className="text-amber-600" />
@@ -4196,11 +4135,11 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                                 type="button"
                                 onClick={handleInsertMatchAndNext}
                                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-400 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 shadow-2xs transition-all cursor-pointer group animate-green-pulse"
-                                title={`Exact match on Customer Name & Address found in saved archive!\nClick to mark SPLF CC with this comment and advance to next order:\n"${matchedSavedComment.comments}"`}
-                                aria-label="Insert matched comment, mark SPLF CC and move to next"
+                                title={`Exact match on Customer Name & Address found in saved archive!\nClick to mark SPLF/APRV with this comment and advance to next order:\n"${matchedSavedComment.comments}"`}
+                                aria-label="Insert matched comment, mark SPLF/APRV and move to next"
                               >
                                 <MessageSquarePlus size={14} className="text-emerald-700 group-hover:scale-110 transition-transform" />
-                                <span className="text-[10px] font-bold text-emerald-900 hidden sm:inline">Insert Match (SPL CC & Next)</span>
+                                <span className="text-[10px] font-bold text-emerald-900 hidden sm:inline">Insert Match (SPLF/APRV & Next)</span>
                               </button>
                             )}
 
@@ -4291,7 +4230,7 @@ export const LiveProcessing: React.FC<LiveProcessingProps> = ({
                         {stats.percent}% Processed
                       </span>
                       <span aria-hidden="true">·</span>
-                      <span className="hidden sm:inline">Shortcuts: [1–9, 0, A, N, R] Decision, [◀/▶] Navigate, [Q] List</span>
+                      <span className="hidden sm:inline">Shortcuts: [1–7, 0, A, N, R] Decision, [◀/▶] Navigate, [Q] List</span>
                     </div>
 
                     <div className="flex items-center gap-2">

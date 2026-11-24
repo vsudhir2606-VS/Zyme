@@ -735,7 +735,26 @@ export interface CompiledRiskAprvMatcher {
 }
 
 const ALERT_STATUS_RISK_REGEX = /(?:^|[^A-Z0-9])(?:ZKWD|ZEMB|EMBF|EMBN)(?:[^A-Z0-9]|$)/i;
+const ZKWD_REGEX = /(?:^|[^A-Z0-9])ZKWD(?:[^A-Z0-9]|$)/i;
+const ZEMB_REGEX = /(?:^|[^A-Z0-9])ZEMB(?:[^A-Z0-9]|$)/i;
 const APRV_STATUS_REGEX = /(?:^|[^A-Z0-9])APRV(?:[^A-Z0-9]|$)/i;
+const HIGH_RISK_LABEL_REGEX = /(?:^|[^a-z0-9])high[\s-_]*risk(?:[^a-z0-9]|$)/i;
+
+export interface RiskCheckRplEntry {
+  rowIndex: number;
+  rplName: string;
+  status?: string;
+  typeOfList?: string;
+  rplScreeningStatus?: string;
+}
+
+export interface SplitDeferredStatus {
+  isDeferred: boolean;
+  hasZkwd: boolean;
+  hasZemb: boolean;
+  hasAprv: boolean;
+  hasHighRisk: boolean;
+}
 
 export const compileRiskAndAprvMatcher = (
   highRiskKeywords: string[] = DEFAULT_HIGH_RISK_KEYWORDS,
@@ -777,31 +796,137 @@ export const compileRiskAndAprvMatcher = (
   return { riskRegex, aprvCodeSet, aprvCountryNameRegex };
 };
 
+const matchesAprvCountryValue = (
+  country: string | undefined,
+  activeMatcher: CompiledRiskAprvMatcher
+): boolean => {
+  if (!country) return false;
+  const rawCountry = country.trim();
+  if (!rawCountry) return false;
+  if (APRV_STATUS_REGEX.test(rawCountry)) return true;
+  const upper = rawCountry.toUpperCase();
+  if (activeMatcher.aprvCodeSet.has(upper)) return true;
+  const tokens = upper.split(/[^A-Z0-9]+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    if (activeMatcher.aprvCodeSet.has(tokens[i])) {
+      return true;
+    }
+  }
+  if (activeMatcher.aprvCountryNameRegex && activeMatcher.aprvCountryNameRegex.test(rawCountry)) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Evaluates whether a Live Processing case should be pushed to the END
+ * under "Split" sorting (ZKWD, ZEMB, APRV, or High Risk orders).
+ */
+export const evaluateSplitDeferredStatus = (
+  customerName: string,
+  country: string | undefined,
+  status: string | undefined,
+  rplEntries: RiskCheckRplEntry[],
+  matcher?: CompiledRiskAprvMatcher
+): SplitDeferredStatus => {
+  const activeMatcher = matcher || compileRiskAndAprvMatcher();
+
+  let hasZkwd =
+    Boolean(status && ZKWD_REGEX.test(status)) ||
+    Boolean(customerName && ZKWD_REGEX.test(customerName));
+  let hasZemb =
+    Boolean(status && ZEMB_REGEX.test(status)) ||
+    Boolean(customerName && ZEMB_REGEX.test(customerName));
+  let hasAprv =
+    Boolean(status && APRV_STATUS_REGEX.test(status)) ||
+    Boolean(customerName && APRV_STATUS_REGEX.test(customerName)) ||
+    matchesAprvCountryValue(country, activeMatcher);
+  let hasHighRisk =
+    Boolean(status && HIGH_RISK_LABEL_REGEX.test(status)) ||
+    Boolean(customerName && HIGH_RISK_LABEL_REGEX.test(customerName)) ||
+    Boolean(activeMatcher.riskRegex && customerName && activeMatcher.riskRegex.test(customerName)) ||
+    Boolean(activeMatcher.riskRegex && status && activeMatcher.riskRegex.test(status));
+
+  for (let i = 0; i < rplEntries.length; i++) {
+    const entry = rplEntries[i];
+    if (!hasZkwd) {
+      if (
+        (entry.typeOfList && ZKWD_REGEX.test(entry.typeOfList)) ||
+        (entry.status && ZKWD_REGEX.test(entry.status)) ||
+        (entry.rplScreeningStatus && ZKWD_REGEX.test(entry.rplScreeningStatus)) ||
+        (entry.rplName && ZKWD_REGEX.test(entry.rplName))
+      ) {
+        hasZkwd = true;
+      }
+    }
+    if (!hasZemb) {
+      if (
+        (entry.typeOfList && ZEMB_REGEX.test(entry.typeOfList)) ||
+        (entry.status && ZEMB_REGEX.test(entry.status)) ||
+        (entry.rplScreeningStatus && ZEMB_REGEX.test(entry.rplScreeningStatus)) ||
+        (entry.rplName && ZEMB_REGEX.test(entry.rplName))
+      ) {
+        hasZemb = true;
+      }
+    }
+    if (!hasAprv) {
+      if (entry.status && APRV_STATUS_REGEX.test(entry.status)) {
+        hasAprv = true;
+      }
+    }
+    if (!hasHighRisk) {
+      if (
+        (entry.status && HIGH_RISK_LABEL_REGEX.test(entry.status)) ||
+        (entry.typeOfList && HIGH_RISK_LABEL_REGEX.test(entry.typeOfList)) ||
+        (entry.rplScreeningStatus && HIGH_RISK_LABEL_REGEX.test(entry.rplScreeningStatus)) ||
+        (activeMatcher.riskRegex && entry.rplName && activeMatcher.riskRegex.test(entry.rplName))
+      ) {
+        hasHighRisk = true;
+      }
+    }
+    if (hasZkwd && hasZemb && hasAprv && hasHighRisk) break;
+  }
+
+  return {
+    isDeferred: hasZkwd || hasZemb || hasAprv || hasHighRisk,
+    hasZkwd,
+    hasZemb,
+    hasAprv,
+    hasHighRisk,
+  };
+};
+
 export const checkCaseRiskAndAprv = (
   customerName: string,
   country: string | undefined,
   status: string | undefined,
-  rplEntries: { rowIndex: number; rplName: string }[],
+  rplEntries: RiskCheckRplEntry[],
   matcher?: CompiledRiskAprvMatcher
 ): { hasRiskKeyword: boolean; hasAprvCountry: boolean } => {
   const activeMatcher = matcher || compileRiskAndAprvMatcher();
 
   let hasRiskKeyword = false;
   if (
-    (status && ALERT_STATUS_RISK_REGEX.test(status)) ||
-    (customerName && ALERT_STATUS_RISK_REGEX.test(customerName))
+    (status && (ALERT_STATUS_RISK_REGEX.test(status) || HIGH_RISK_LABEL_REGEX.test(status))) ||
+    (customerName && (ALERT_STATUS_RISK_REGEX.test(customerName) || HIGH_RISK_LABEL_REGEX.test(customerName)))
   ) {
     hasRiskKeyword = true;
-  } else if (activeMatcher.riskRegex) {
+  } else {
     if (
-      (customerName && activeMatcher.riskRegex.test(customerName)) ||
-      (status && activeMatcher.riskRegex.test(status))
+      activeMatcher.riskRegex &&
+      ((customerName && activeMatcher.riskRegex.test(customerName)) ||
+        (status && activeMatcher.riskRegex.test(status)))
     ) {
       hasRiskKeyword = true;
     } else {
       for (let i = 0; i < rplEntries.length; i++) {
-        const rn = rplEntries[i].rplName;
-        if (rn && activeMatcher.riskRegex.test(rn)) {
+        const entry = rplEntries[i];
+        if (
+          (entry.typeOfList && (ALERT_STATUS_RISK_REGEX.test(entry.typeOfList) || HIGH_RISK_LABEL_REGEX.test(entry.typeOfList))) ||
+          (entry.status && (ALERT_STATUS_RISK_REGEX.test(entry.status) || HIGH_RISK_LABEL_REGEX.test(entry.status))) ||
+          (entry.rplScreeningStatus && (ALERT_STATUS_RISK_REGEX.test(entry.rplScreeningStatus) || HIGH_RISK_LABEL_REGEX.test(entry.rplScreeningStatus))) ||
+          (activeMatcher.riskRegex && entry.rplName && activeMatcher.riskRegex.test(entry.rplName))
+        ) {
           hasRiskKeyword = true;
           break;
         }
@@ -809,31 +934,16 @@ export const checkCaseRiskAndAprv = (
     }
   }
 
-  let hasAprvCountry = false;
-  if (
-    (status && APRV_STATUS_REGEX.test(status)) ||
-    (customerName && APRV_STATUS_REGEX.test(customerName))
-  ) {
-    hasAprvCountry = true;
-  } else if (country) {
-    const rawCountry = country.trim();
-    if (rawCountry) {
-      const upper = rawCountry.toUpperCase();
-      if (activeMatcher.aprvCodeSet.has(upper)) {
+  let hasAprvCountry =
+    Boolean(status && APRV_STATUS_REGEX.test(status)) ||
+    Boolean(customerName && APRV_STATUS_REGEX.test(customerName)) ||
+    matchesAprvCountryValue(country, activeMatcher);
+
+  if (!hasAprvCountry) {
+    for (let i = 0; i < rplEntries.length; i++) {
+      if (rplEntries[i].status && APRV_STATUS_REGEX.test(rplEntries[i].status!)) {
         hasAprvCountry = true;
-      } else {
-        const tokens = upper.split(/[^A-Z0-9]+/).filter(Boolean);
-        for (let i = 0; i < tokens.length; i++) {
-          if (activeMatcher.aprvCodeSet.has(tokens[i])) {
-            hasAprvCountry = true;
-            break;
-          }
-        }
-      }
-      if (!hasAprvCountry && activeMatcher.aprvCountryNameRegex) {
-        if (activeMatcher.aprvCountryNameRegex.test(rawCountry)) {
-          hasAprvCountry = true;
-        }
+        break;
       }
     }
   }
@@ -844,7 +954,7 @@ export const checkCaseRiskAndAprv = (
 export const evaluateCaseMatches = (
   customerName: string,
   customerCity: string | undefined,
-  rplEntries: { rowIndex: number; rplName: string }[],
+  rplEntries: RiskCheckRplEntry[],
   lookup: CompiledIgnoreLookup,
   options?: {
     country?: string;
