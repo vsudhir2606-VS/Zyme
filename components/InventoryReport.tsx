@@ -856,7 +856,6 @@ Please find the Zyme inventory details for ${formattedDate}:
 
   const copyIndividualTableForEmail = async () => {
     if (visibleIndividualRows.length === 0) return;
-    const colTitle = escapeHtml(individualColHeader);
     const sumFiles = visibleIndividualRows.reduce((s, r) => s + r.releasedFiles, 0);
     const sumTxns = visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0);
     const sumAmsFiles = visibleIndividualRows.reduce((s, r) => s + r.amsFiles, 0);
@@ -872,7 +871,7 @@ Please find the Zyme inventory details for ${formattedDate}:
           <table style="width: 100%; max-width: 880px; border-collapse: collapse; font-size: 12px;">
             <thead>
               <tr style="background-color: #0f172a; color: #ffffff;">
-                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">${colTitle}</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">EMP ID</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Name</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Team</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Files Released</th>
@@ -912,7 +911,7 @@ Please find the Zyme inventory details for ${formattedDate}:
       `;
 
       const plainText = [
-        `${individualColHeader}\tName\tTeam\tFiles Released\tTXNs Released\tAMS (Files/TXN)\tAPJ (Files/TXN)\tEMEA (Files/TXN)`,
+        `EMP ID\tName\tTeam\tFiles Released\tTXNs Released\tAMS (Files/TXN)\tAPJ (Files/TXN)\tEMEA (Files/TXN)`,
         ...visibleIndividualRows.map(
           ind =>
             `${ind.lockedBy}\t${ind.name || ''}\t${ind.team || ''}\t${ind.releasedFiles}\t${Math.round(ind.totalTxnsReleased)}\t${ind.amsFiles}/${Math.round(ind.amsTxns)}\t${ind.apjFiles}/${Math.round(ind.apjTxns)}\t${ind.emeaFiles}/${Math.round(ind.emeaTxns)}`
@@ -1225,7 +1224,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                         ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
                         : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
                     }`}
-                    title={`View released files & transactions broken down by individual (Column J: ${individualColHeader})`}
+                    title="View released files & transactions broken down by individual (Column J: EMP ID)"
                   >
                     <Users size={13} />
                     <span>Individual Released Details</span>
@@ -1359,7 +1358,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                             Individual Released Details — {filteredResults.formattedDate}
                           </h4>
                           <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white border border-emerald-200 text-emerald-800">
-                            Col J: {individualColHeader}
+                            Col J: EMP ID
                           </span>
                         </div>
                         <p className="text-xs text-slate-500 mt-0.5">
@@ -1380,7 +1379,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                             ? 'bg-slate-800 text-white border-slate-900'
                             : 'text-slate-700 bg-white hover:bg-slate-50 border-slate-200'
                         }`}
-                        title="Add or update Locked By ID to Individual Name mappings"
+                        title="Add or update EMP ID to Individual Name mappings"
                       >
                         <Settings size={13} />
                         <span>Name Directory ({lockedByDirectory.length})</span>
@@ -1432,10 +1431,10 @@ Please find the Zyme inventory details for ${formattedDate}:
                       <div className="flex items-center justify-between gap-2 flex-wrap">
                         <div>
                           <p className="text-xs font-bold text-slate-800">
-                            Locked By → Individual Name Directory
+                            EMP ID → Individual Name Directory
                           </p>
                           <p className="text-[11px] text-slate-500">
-                            Maps Column J Locked By IDs to individual names and teams across the inventory report.
+                            Maps Column J EMP IDs to individual names and teams across the inventory report.
                           </p>
                         </div>
                         <button
@@ -1454,7 +1453,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                           type="text"
                           value={newDirId}
                           onChange={(e) => setNewDirId(e.target.value)}
-                          placeholder="Locked By ID (e.g. 90052035)"
+                          placeholder="EMP ID (e.g. 90052035)"
                           className="w-40 px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
                         />
                         <input
@@ -1583,18 +1582,18 @@ Please find the Zyme inventory details for ${formattedDate}:
                         type="text"
                         value={individualSearch}
                         onChange={(e) => setIndividualSearch(e.target.value)}
-                        placeholder="Search Locked By, Name, Team..."
+                        placeholder="Search EMP ID, Name, Team..."
                         className="w-full pl-7 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       />
                     </div>
                   </div>
 
-                  {/* Individual Breakdown Table (Locked By + Adjacent Name) */}
+                  {/* Individual Breakdown Table (EMP ID + Adjacent Name) */}
                   <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
                     <table className="w-full text-xs text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-900 text-slate-100">
-                          <th className="py-2.5 px-3.5 font-bold">{individualColHeader}</th>
+                          <th className="py-2.5 px-3.5 font-bold">EMP ID</th>
                           <th className="py-2.5 px-3.5 font-bold">Name</th>
                           <th className="py-2.5 px-3.5 font-bold text-right">Files Released</th>
                           <th className="py-2.5 px-3.5 font-bold text-right">TXNs Released</th>
