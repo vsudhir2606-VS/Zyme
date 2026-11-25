@@ -17,9 +17,13 @@ import {
   Clock,
   Ban,
   AlertTriangle,
+  Users,
+  User,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
+
+const INDIVIDUAL_COL_IDX = 9; // Column J (0-indexed: A=0 .. J=9)
 
 interface ParsedInventoryRow {
   rowIndex: number;
@@ -33,6 +37,7 @@ interface ParsedInventoryRow {
   primaryDate: string;
   releasedItemCount: number;
   blockedItemCount: number;
+  individual: string;
 }
 
 interface RegionalStatRow {
@@ -44,15 +49,35 @@ interface RegionalStatRow {
   countEscalated: number;
 }
 
+interface IndividualReleasedRow {
+  key: string;
+  name: string;
+  isUnassigned: boolean;
+  releasedFiles: number;
+  totalTxnsReleased: number;
+  amsFiles: number;
+  amsTxns: number;
+  apjFiles: number;
+  apjTxns: number;
+  emeaFiles: number;
+  emeaTxns: number;
+  rows: ParsedInventoryRow[];
+}
+
 export const InventoryReport: React.FC = () => {
   const [fileName, setFileName] = useState<string | null>(null);
   const [allParsedRows, setAllParsedRows] = useState<ParsedInventoryRow[]>([]);
+  const [individualColHeader, setIndividualColHeader] = useState<string>('Individual (Col J)');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(
     () => new Date().toISOString().split('T')[0]
   );
-  const [copiedMode, setCopiedMode] = useState<'text' | 'email' | null>(null);
+  const [copiedMode, setCopiedMode] = useState<'text' | 'email' | 'ind-text' | 'ind-email' | null>(null);
+  const [showIndividualDetails, setShowIndividualDetails] = useState<boolean>(false);
+  const [individualSearch, setIndividualSearch] = useState<string>('');
+  const [individualSort, setIndividualSort] = useState<'txns' | 'files' | 'name'>('txns');
+  const [expandedIndividualKey, setExpandedIndividualKey] = useState<string | null>(null);
   const [showDetailsTable, setShowDetailsTable] = useState<boolean>(false);
   const [detailsTab, setDetailsTab] = useState<'released' | 'pending' | 'escalated'>('released');
   const [detailSearch, setDetailSearch] = useState<string>('');
@@ -302,6 +327,10 @@ export const InventoryReport: React.FC = () => {
       }
 
       const headerRow = rawRows[headerRowIdx] || [];
+      const fmtHeaderRow = formattedRows[headerRowIdx] || [];
+      const detectedColJHeader = String(
+        fmtHeaderRow[INDIVIDUAL_COL_IDX] ?? headerRow[INDIVIDUAL_COL_IDX] ?? ''
+      ).trim();
 
       if (businessTypeColIdx === -1) {
         businessTypeColIdx = headerRow.findIndex(c =>
@@ -371,6 +400,12 @@ export const InventoryReport: React.FC = () => {
             ? parseZymeNumber(rawRow[blockedCountColIdx] ?? fmtRow[blockedCountColIdx])
             : 0;
 
+        const individual = String(
+          fmtRow[INDIVIDUAL_COL_IDX] ?? rawRow[INDIVIDUAL_COL_IDX] ?? ''
+        )
+          .trim()
+          .replace(/\s+/g, ' ');
+
         const region = getRegionFromSessionKey(sessionKey);
         const isInProcess = checkIsInProcessOrNew(status);
 
@@ -386,16 +421,20 @@ export const InventoryReport: React.FC = () => {
           primaryDate,
           releasedItemCount,
           blockedItemCount,
+          individual,
         });
       }
 
+      setIndividualColHeader(detectedColJHeader || 'Individual (Col J)');
       setAllParsedRows(parsed);
       setFileName(file.name);
+      setExpandedIndividualKey(null);
     } catch (err: any) {
       console.error('Error parsing inventory Excel file:', err);
       setError(err.message || `Failed to parse "${file.name}"`);
       setAllParsedRows([]);
       setFileName(null);
+      setIndividualColHeader('Individual (Col J)');
     } finally {
       setIsProcessing(false);
       if (e.target) e.target.value = '';
@@ -535,6 +574,52 @@ Please find the Zyme inventory details for ${formattedDate}:
 • Total Txn's Pending: ${Math.round(totalTxnsPending)} TXN (AMS: ${Math.round(statsByRegion.AMS.totalTxnsPending)}, APJ: ${Math.round(statsByRegion.APJ.totalTxnsPending)}, EMEA: ${Math.round(statsByRegion.EMEA.totalTxnsPending)})
 • Count Escalated: ${totalCountEscalated} files (APJ: ${statsByRegion.APJ.countEscalated}, AMS: ${statsByRegion.AMS.countEscalated}, EMEA: ${statsByRegion.EMEA.countEscalated})`;
 
+    // Individual Released Details (grouped by Column J)
+    const individualMap = new Map<string, IndividualReleasedRow>();
+    releasedRows.forEach(row => {
+      const cleanName = row.individual.trim();
+      const isUnassigned = !cleanName;
+      const groupKey = isUnassigned ? '__unassigned__' : cleanName.toLowerCase();
+      let entry = individualMap.get(groupKey);
+      if (!entry) {
+        entry = {
+          key: groupKey,
+          name: isUnassigned ? 'Unassigned (Blank Col J)' : cleanName,
+          isUnassigned,
+          releasedFiles: 0,
+          totalTxnsReleased: 0,
+          amsFiles: 0,
+          amsTxns: 0,
+          apjFiles: 0,
+          apjTxns: 0,
+          emeaFiles: 0,
+          emeaTxns: 0,
+          rows: [],
+        };
+        individualMap.set(groupKey, entry);
+      }
+      entry.releasedFiles += 1;
+      entry.totalTxnsReleased += row.releasedItemCount;
+      if (row.region === 'AMS') {
+        entry.amsFiles += 1;
+        entry.amsTxns += row.releasedItemCount;
+      } else if (row.region === 'APJ') {
+        entry.apjFiles += 1;
+        entry.apjTxns += row.releasedItemCount;
+      } else if (row.region === 'EMEA') {
+        entry.emeaFiles += 1;
+        entry.emeaTxns += row.releasedItemCount;
+      }
+      entry.rows.push(row);
+    });
+
+    const individualReleasedList = Array.from(individualMap.values()).sort((a, b) => {
+      if (a.isUnassigned !== b.isUnassigned) return a.isUnassigned ? 1 : -1;
+      if (b.totalTxnsReleased !== a.totalTxnsReleased) return b.totalTxnsReleased - a.totalTxnsReleased;
+      if (b.releasedFiles !== a.releasedFiles) return b.releasedFiles - a.releasedFiles;
+      return a.name.localeCompare(b.name);
+    });
+
     return {
       totalRawRows: allParsedRows.length,
       zymeRowCount: zymeRows.length,
@@ -543,6 +628,7 @@ Please find the Zyme inventory details for ${formattedDate}:
       inProcessRows,
       escalatedRows,
       regionalRows: [...regionalList, totalRow],
+      individualReleasedList,
       statsByRegion,
       totalFilesReleased,
       totalTxnsReleased,
@@ -637,10 +723,140 @@ Please find the Zyme inventory details for ${formattedDate}:
     }
   };
 
+  const escapeHtml = (str: string) =>
+    str
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+
+  const visibleIndividualRows = useMemo(() => {
+    const q = individualSearch.toLowerCase().trim();
+    const list = q
+      ? filteredResults.individualReleasedList.filter(
+          ind =>
+            ind.name.toLowerCase().includes(q) ||
+            ind.rows.some(r => r.sessionKey.toLowerCase().includes(q))
+        )
+      : [...filteredResults.individualReleasedList];
+
+    list.sort((a, b) => {
+      if (a.isUnassigned !== b.isUnassigned) return a.isUnassigned ? 1 : -1;
+      if (individualSort === 'files') {
+        if (b.releasedFiles !== a.releasedFiles) return b.releasedFiles - a.releasedFiles;
+        return b.totalTxnsReleased - a.totalTxnsReleased;
+      }
+      if (individualSort === 'name') {
+        return a.name.localeCompare(b.name);
+      }
+      if (b.totalTxnsReleased !== a.totalTxnsReleased) return b.totalTxnsReleased - a.totalTxnsReleased;
+      return b.releasedFiles - a.releasedFiles;
+    });
+    return list;
+  }, [filteredResults.individualReleasedList, individualSearch, individualSort]);
+
+  const copyIndividualText = async () => {
+    if (visibleIndividualRows.length === 0) return;
+    const sumFiles = visibleIndividualRows.reduce((s, r) => s + r.releasedFiles, 0);
+    const sumTxns = visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0);
+    const lines = [
+      `Individual Released Details — ${filteredResults.formattedDate} (${individualColHeader}):`,
+      '',
+      ...visibleIndividualRows.map(
+        ind =>
+          `• ${ind.name}: ${ind.releasedFiles} files / ${Math.round(ind.totalTxnsReleased)} TXN (AMS: ${ind.amsFiles}/${Math.round(ind.amsTxns)}, APJ: ${ind.apjFiles}/${Math.round(ind.apjTxns)}, EMEA: ${ind.emeaFiles}/${Math.round(ind.emeaTxns)})`
+      ),
+      '',
+      `Total: ${sumFiles} files / ${Math.round(sumTxns)} TXN`,
+    ];
+    await navigator.clipboard.writeText(lines.join('\n'));
+    setCopiedMode('ind-text');
+    setTimeout(() => setCopiedMode(null), 2200);
+  };
+
+  const copyIndividualTableForEmail = async () => {
+    if (visibleIndividualRows.length === 0) return;
+    const colTitle = escapeHtml(individualColHeader);
+    const sumFiles = visibleIndividualRows.reduce((s, r) => s + r.releasedFiles, 0);
+    const sumTxns = visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0);
+    const sumAmsFiles = visibleIndividualRows.reduce((s, r) => s + r.amsFiles, 0);
+    const sumAmsTxns = visibleIndividualRows.reduce((s, r) => s + r.amsTxns, 0);
+    const sumApjFiles = visibleIndividualRows.reduce((s, r) => s + r.apjFiles, 0);
+    const sumApjTxns = visibleIndividualRows.reduce((s, r) => s + r.apjTxns, 0);
+    const sumEmeaFiles = visibleIndividualRows.reduce((s, r) => s + r.emeaFiles, 0);
+    const sumEmeaTxns = visibleIndividualRows.reduce((s, r) => s + r.emeaTxns, 0);
+    try {
+      const tableHtml = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a;">
+          <p style="font-size: 13px; font-weight: 700; margin: 0 0 8px 0;">Individual Released Details — ${escapeHtml(filteredResults.formattedDate)}</p>
+          <table style="width: 100%; max-width: 780px; border-collapse: collapse; font-size: 12px;">
+            <thead>
+              <tr style="background-color: #0f172a; color: #ffffff;">
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">${colTitle}</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Files Released</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">TXNs Released</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">AMS (Files / TXN)</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">APJ (Files / TXN)</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">EMEA (Files / TXN)</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${visibleIndividualRows
+                .map(
+                  ind => `
+                <tr style="background-color: #ffffff;">
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">${escapeHtml(ind.name)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.releasedFiles}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #047857;">${Math.round(ind.totalTxnsReleased)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.amsFiles} / ${Math.round(ind.amsTxns)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.apjFiles} / ${Math.round(ind.apjTxns)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.emeaFiles} / ${Math.round(ind.emeaTxns)}</td>
+                </tr>`
+                )
+                .join('')}
+              <tr style="background-color: #f1f5f9; font-weight: 700;">
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0;">Total</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumFiles}</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #047857;">${Math.round(sumTxns)}</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumAmsFiles} / ${Math.round(sumAmsTxns)}</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumApjFiles} / ${Math.round(sumApjTxns)}</td>
+                <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumEmeaFiles} / ${Math.round(sumEmeaTxns)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      const plainText = [
+        `${individualColHeader}\tFiles Released\tTXNs Released\tAMS (Files/TXN)\tAPJ (Files/TXN)\tEMEA (Files/TXN)`,
+        ...visibleIndividualRows.map(
+          ind =>
+            `${ind.name}\t${ind.releasedFiles}\t${Math.round(ind.totalTxnsReleased)}\t${ind.amsFiles}/${Math.round(ind.amsTxns)}\t${ind.apjFiles}/${Math.round(ind.apjTxns)}\t${ind.emeaFiles}/${Math.round(ind.emeaTxns)}`
+        ),
+        `Total\t${sumFiles}\t${Math.round(sumTxns)}\t${sumAmsFiles}/${Math.round(sumAmsTxns)}\t${sumApjFiles}/${Math.round(sumApjTxns)}\t${sumEmeaFiles}/${Math.round(sumEmeaTxns)}`,
+      ].join('\n');
+
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/html': new Blob([tableHtml], { type: 'text/html' }),
+          'text/plain': new Blob([plainText], { type: 'text/plain' }),
+        }),
+      ]);
+      setCopiedMode('ind-email');
+      setTimeout(() => setCopiedMode(null), 2200);
+    } catch {
+      await copyIndividualText();
+    }
+  };
+
   const resetAll = () => {
     setFileName(null);
     setAllParsedRows([]);
+    setIndividualColHeader('Individual (Col J)');
     setError(null);
+    setShowIndividualDetails(false);
+    setIndividualSearch('');
+    setExpandedIndividualKey(null);
     setShowDetailsTable(false);
     setDetailSearch('');
   };
@@ -659,7 +875,8 @@ Please find the Zyme inventory details for ${formattedDate}:
       r =>
         r.sessionKey.toLowerCase().includes(q) ||
         r.region.toLowerCase().includes(q) ||
-        r.status.toLowerCase().includes(q)
+        r.status.toLowerCase().includes(q) ||
+        r.individual.toLowerCase().includes(q)
     );
   }, [detailsTab, filteredResults, detailSearch]);
 
@@ -910,7 +1127,30 @@ Please find the Zyme inventory details for ${formattedDate}:
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setShowIndividualDetails(prev => !prev)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer active:scale-95 ${
+                      showIndividualDetails
+                        ? 'bg-emerald-600 text-white border-emerald-700 shadow-xs'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                    }`}
+                    title={`View released files & transactions broken down by individual (Column J: ${individualColHeader})`}
+                  >
+                    <Users size={13} />
+                    <span>Individual Released Details</span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold tabular-nums ${
+                        showIndividualDetails
+                          ? 'bg-emerald-700 text-emerald-50'
+                          : 'bg-white text-emerald-700 border border-emerald-200'
+                      }`}
+                    >
+                      {filteredResults.individualReleasedList.length}
+                    </span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={copyToClipboard}
@@ -1016,6 +1256,296 @@ Please find the Zyme inventory details for ${formattedDate}:
                 </div>
               </div>
 
+              {/* Individual Released Details Section (Column J) */}
+              {showIndividualDetails && (
+                <div className="px-5 py-4 border-t border-slate-200 bg-emerald-50/30 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-emerald-700 flex-shrink-0">
+                        <Users size={15} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Individual Released Details — {filteredResults.formattedDate}
+                          </h4>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-white border border-emerald-200 text-emerald-800">
+                            Col J: {individualColHeader}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {filteredResults.individualReleasedList.length} individual
+                          {filteredResults.individualReleasedList.length === 1 ? '' : 's'} ·{' '}
+                          {filteredResults.totalFilesReleased} files ·{' '}
+                          {Math.round(filteredResults.totalTxnsReleased)} released TXNs (click any row to view files)
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={copyIndividualText}
+                        disabled={visibleIndividualRows.length === 0}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-slate-700 bg-white hover:bg-slate-50 disabled:opacity-40 border border-slate-200 rounded-xl transition-all text-xs font-semibold cursor-pointer"
+                      >
+                        {copiedMode === 'ind-text' ? (
+                          <>
+                            <Check size={13} className="text-emerald-600" />
+                            <span className="text-emerald-700">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={13} className="text-slate-500" />
+                            <span>Copy Text</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={copyIndividualTableForEmail}
+                        disabled={visibleIndividualRows.length === 0}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl transition-all text-xs font-semibold shadow-xs cursor-pointer"
+                      >
+                        {copiedMode === 'ind-email' ? (
+                          <>
+                            <Check size={13} />
+                            <span>Copied Table</span>
+                          </>
+                        ) : (
+                          <>
+                            <Mail size={13} />
+                            <span>Copy Table</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Search & Sort Controls */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-1 p-1 bg-white border border-slate-200 rounded-xl">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2">
+                        Sort:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setIndividualSort('txns')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          individualSort === 'txns'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        TXNs Released
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIndividualSort('files')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          individualSort === 'files'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Files Released
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIndividualSort('name')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          individualSort === 'name'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Name A–Z
+                      </button>
+                    </div>
+
+                    <div className="relative w-full sm:w-64">
+                      <Search
+                        size={13}
+                        className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400"
+                      />
+                      <input
+                        type="text"
+                        value={individualSearch}
+                        onChange={(e) => setIndividualSearch(e.target.value)}
+                        placeholder={`Search ${individualColHeader} or session key...`}
+                        className="w-full pl-7 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Individual Breakdown Table */}
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-900 text-slate-100">
+                          <th className="py-2.5 px-3.5 font-bold">{individualColHeader}</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">Files Released</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">TXNs Released</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">AMS (Files / TXN)</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">APJ (Files / TXN)</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">EMEA (Files / TXN)</th>
+                          <th className="py-2.5 px-3.5 font-bold text-right">Share</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                        {visibleIndividualRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="p-6 text-center text-slate-400 font-sans text-xs">
+                              No released records found for {filteredResults.formattedDate}.
+                            </td>
+                          </tr>
+                        ) : (
+                          <>
+                            {visibleIndividualRows.map((ind) => {
+                              const isExpanded = expandedIndividualKey === ind.key;
+                              const sharePct =
+                                filteredResults.totalTxnsReleased > 0
+                                  ? Math.round(
+                                      (ind.totalTxnsReleased / filteredResults.totalTxnsReleased) * 100
+                                    )
+                                  : 0;
+                              return (
+                                <React.Fragment key={ind.key}>
+                                  <tr
+                                    onClick={() =>
+                                      setExpandedIndividualKey(prev => (prev === ind.key ? null : ind.key))
+                                    }
+                                    className={`cursor-pointer transition-colors ${
+                                      isExpanded ? 'bg-emerald-50/70' : 'bg-white hover:bg-slate-50/80'
+                                    }`}
+                                    title="Click to expand released files for this individual"
+                                  >
+                                    <td className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
+                                      <div className="flex items-center gap-2">
+                                        {isExpanded ? (
+                                          <ChevronUp size={13} className="text-emerald-600 flex-shrink-0" />
+                                        ) : (
+                                          <ChevronDown size={13} className="text-slate-400 flex-shrink-0" />
+                                        )}
+                                        <User
+                                          size={13}
+                                          className={
+                                            ind.isUnassigned
+                                              ? 'text-slate-400 flex-shrink-0'
+                                              : 'text-emerald-600 flex-shrink-0'
+                                          }
+                                        />
+                                        <span className={ind.isUnassigned ? 'italic text-slate-500 font-medium' : ''}>
+                                          {ind.name}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-800 font-semibold">
+                                      {ind.releasedFiles}
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-emerald-700 font-bold">
+                                      {Math.round(ind.totalTxnsReleased)}
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-600">
+                                      {ind.amsFiles > 0 ? `${ind.amsFiles} / ${Math.round(ind.amsTxns)}` : '—'}
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-600">
+                                      {ind.apjFiles > 0 ? `${ind.apjFiles} / ${Math.round(ind.apjTxns)}` : '—'}
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-600">
+                                      {ind.emeaFiles > 0 ? `${ind.emeaFiles} / ${Math.round(ind.emeaTxns)}` : '—'}
+                                    </td>
+                                    <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-500">
+                                      {sharePct}%
+                                    </td>
+                                  </tr>
+
+                                  {isExpanded && (
+                                    <tr className="bg-slate-50/90">
+                                      <td colSpan={7} className="px-4 py-3">
+                                        <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto max-h-56">
+                                          <table className="w-full text-[11px] text-left border-collapse">
+                                            <thead className="bg-slate-100 text-slate-600 sticky top-0 border-b border-slate-200 font-sans">
+                                              <tr>
+                                                <th className="py-1.5 px-3 font-semibold">Session Key</th>
+                                                <th className="py-1.5 px-3 font-semibold">Region</th>
+                                                <th className="py-1.5 px-3 font-semibold">Status</th>
+                                                <th className="py-1.5 px-3 font-semibold">Last Changed (UTC)</th>
+                                                <th className="py-1.5 px-3 font-semibold text-right">Released TXNs</th>
+                                                <th className="py-1.5 px-3 font-semibold text-right">Blocked TXNs</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-slate-100 font-mono text-[10px]">
+                                              {ind.rows.map((r, rIdx) => (
+                                                <tr key={`${ind.key}-${r.rowIndex}-${rIdx}`} className="hover:bg-slate-50">
+                                                  <td className="py-1.5 px-3 font-bold text-slate-900">
+                                                    {r.sessionKey}
+                                                  </td>
+                                                  <td className="py-1.5 px-3 font-sans font-medium text-slate-700">
+                                                    {r.region}
+                                                  </td>
+                                                  <td className="py-1.5 px-3 font-sans text-slate-600">
+                                                    {r.status || '—'}
+                                                  </td>
+                                                  <td className="py-1.5 px-3 text-slate-500 tabular-nums">
+                                                    {r.lastChangedRaw || '—'}
+                                                  </td>
+                                                  <td className="py-1.5 px-3 text-right tabular-nums font-bold text-emerald-700">
+                                                    {Math.round(r.releasedItemCount)}
+                                                  </td>
+                                                  <td className="py-1.5 px-3 text-right tabular-nums font-bold text-rose-600">
+                                                    {Math.round(r.blockedItemCount)}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  )}
+                                </React.Fragment>
+                              );
+                            })}
+
+                            {/* Total Row */}
+                            <tr className="bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-200">
+                              <td className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
+                                Total ({visibleIndividualRows.length})
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums">
+                                {visibleIndividualRows.reduce((s, r) => s + r.releasedFiles, 0)}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums text-emerald-700">
+                                {Math.round(
+                                  visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0)
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-700">
+                                {visibleIndividualRows.reduce((s, r) => s + r.amsFiles, 0)} /{' '}
+                                {Math.round(visibleIndividualRows.reduce((s, r) => s + r.amsTxns, 0))}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-700">
+                                {visibleIndividualRows.reduce((s, r) => s + r.apjFiles, 0)} /{' '}
+                                {Math.round(visibleIndividualRows.reduce((s, r) => s + r.apjTxns, 0))}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-700">
+                                {visibleIndividualRows.reduce((s, r) => s + r.emeaFiles, 0)} /{' '}
+                                {Math.round(visibleIndividualRows.reduce((s, r) => s + r.emeaTxns, 0))}
+                              </td>
+                              <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-600">
+                                100%
+                              </td>
+                            </tr>
+                          </>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {/* Collapsible Record Inspector */}
               <div className="px-5 py-3 bg-slate-50/60 border-t border-slate-100">
                 <button
@@ -1082,7 +1612,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                           type="text"
                           value={detailSearch}
                           onChange={(e) => setDetailSearch(e.target.value)}
-                          placeholder="Filter session keys..."
+                          placeholder="Filter session keys or individual..."
                           className="w-full pl-7 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                         />
                       </div>
@@ -1094,6 +1624,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                           <tr>
                             <th className="py-2 px-3 font-semibold">Session Key</th>
                             <th className="py-2 px-3 font-semibold">Region</th>
+                            <th className="py-2 px-3 font-semibold">{individualColHeader}</th>
                             <th className="py-2 px-3 font-semibold">Status</th>
                             <th className="py-2 px-3 font-semibold">Last Changed (UTC)</th>
                             <th className="py-2 px-3 font-semibold text-right">Released TXNs</th>
@@ -1103,7 +1634,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                         <tbody className="divide-y divide-slate-100 font-mono text-[10px]">
                           {activeDetailRows.length === 0 ? (
                             <tr>
-                              <td colSpan={6} className="p-4 text-center text-slate-400 font-sans">
+                              <td colSpan={7} className="p-4 text-center text-slate-400 font-sans">
                                 No records matching view.
                               </td>
                             </tr>
@@ -1115,6 +1646,9 @@ Please find the Zyme inventory details for ${formattedDate}:
                                 </td>
                                 <td className="py-1.5 px-3 font-sans font-medium text-slate-700">
                                   {r.region}
+                                </td>
+                                <td className="py-1.5 px-3 font-sans font-semibold text-slate-800">
+                                  {r.individual || '—'}
                                 </td>
                                 <td className="py-1.5 px-3 text-slate-600 font-sans">{r.status || '—'}</td>
                                 <td className="py-1.5 px-3 text-slate-500 tabular-nums">
