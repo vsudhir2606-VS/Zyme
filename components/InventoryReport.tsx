@@ -19,9 +19,22 @@ import {
   AlertTriangle,
   Users,
   User,
+  Plus,
+  RotateCcw,
+  Settings,
+  X,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { clampWorksheetRange } from '../utils/excelSafety.ts';
+import {
+  LockedByEntry,
+  DEFAULT_LOCKED_BY_DIRECTORY,
+  loadLockedByDirectory,
+  saveLockedByDirectory,
+  buildLockedByLookupMap,
+  resolveLockedByPerson,
+  normalizeLockedByKey,
+} from '../utils/inventoryDirectory.ts';
 
 const INDIVIDUAL_COL_IDX = 9; // Column J (0-indexed: A=0 .. J=9)
 
@@ -51,7 +64,9 @@ interface RegionalStatRow {
 
 interface IndividualReleasedRow {
   key: string;
+  lockedBy: string;
   name: string;
+  team: string;
   isUnassigned: boolean;
   releasedFiles: number;
   totalTxnsReleased: number;
@@ -67,7 +82,7 @@ interface IndividualReleasedRow {
 export const InventoryReport: React.FC = () => {
   const [fileName, setFileName] = useState<string | null>(null);
   const [allParsedRows, setAllParsedRows] = useState<ParsedInventoryRow[]>([]);
-  const [individualColHeader, setIndividualColHeader] = useState<string>('Individual (Col J)');
+  const [individualColHeader, setIndividualColHeader] = useState<string>('Locked By');
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(
@@ -77,10 +92,58 @@ export const InventoryReport: React.FC = () => {
   const [showIndividualDetails, setShowIndividualDetails] = useState<boolean>(false);
   const [individualSearch, setIndividualSearch] = useState<string>('');
   const [individualSort, setIndividualSort] = useState<'txns' | 'files' | 'name'>('txns');
+  const [individualTeamFilter, setIndividualTeamFilter] = useState<'ALL' | 'BGL' | 'GDL'>('ALL');
   const [expandedIndividualKey, setExpandedIndividualKey] = useState<string | null>(null);
+  const [lockedByDirectory, setLockedByDirectory] = useState<LockedByEntry[]>(() => loadLockedByDirectory());
+  const [showDirectoryManager, setShowDirectoryManager] = useState<boolean>(false);
+  const [newDirId, setNewDirId] = useState<string>('');
+  const [newDirName, setNewDirName] = useState<string>('');
+  const [newDirTeam, setNewDirTeam] = useState<string>('BGL');
   const [showDetailsTable, setShowDetailsTable] = useState<boolean>(false);
   const [detailsTab, setDetailsTab] = useState<'released' | 'pending' | 'escalated'>('released');
   const [detailSearch, setDetailSearch] = useState<string>('');
+
+  const lockedByLookupMap = useMemo(
+    () => buildLockedByLookupMap(lockedByDirectory),
+    [lockedByDirectory]
+  );
+
+  const updateLockedByDirectory = (next: LockedByEntry[]) => {
+    setLockedByDirectory(next);
+    saveLockedByDirectory(next);
+  };
+
+  const handleAddDirectoryEntry = (e: React.FormEvent) => {
+    e.preventDefault();
+    const id = normalizeLockedByKey(newDirId);
+    const name = newDirName.trim();
+    const team = newDirTeam.trim().toUpperCase();
+    if (!id || !name) return;
+
+    const existingIdx = lockedByDirectory.findIndex(
+      entry => normalizeLockedByKey(entry.lockedBy) === id
+    );
+    const next = [...lockedByDirectory];
+    if (existingIdx >= 0) {
+      next[existingIdx] = { lockedBy: id, name, team };
+    } else {
+      next.push({ lockedBy: id, name, team });
+    }
+    updateLockedByDirectory(next);
+    setNewDirId('');
+    setNewDirName('');
+  };
+
+  const handleRemoveDirectoryEntry = (lockedById: string) => {
+    const key = normalizeLockedByKey(lockedById);
+    updateLockedByDirectory(
+      lockedByDirectory.filter(entry => normalizeLockedByKey(entry.lockedBy) !== key)
+    );
+  };
+
+  const handleResetDirectory = () => {
+    updateLockedByDirectory(DEFAULT_LOCKED_BY_DIRECTORY.map(e => ({ ...e })));
+  };
 
   const parseZymeNumber = (val: any): number => {
     if (val === undefined || val === null || val === '') return 0;
@@ -425,7 +488,7 @@ export const InventoryReport: React.FC = () => {
         });
       }
 
-      setIndividualColHeader(detectedColJHeader || 'Individual (Col J)');
+      setIndividualColHeader(detectedColJHeader || 'Locked By');
       setAllParsedRows(parsed);
       setFileName(file.name);
       setExpandedIndividualKey(null);
@@ -434,7 +497,7 @@ export const InventoryReport: React.FC = () => {
       setError(err.message || `Failed to parse "${file.name}"`);
       setAllParsedRows([]);
       setFileName(null);
-      setIndividualColHeader('Individual (Col J)');
+      setIndividualColHeader('Locked By');
     } finally {
       setIsProcessing(false);
       if (e.target) e.target.value = '';
@@ -574,17 +637,27 @@ Please find the Zyme inventory details for ${formattedDate}:
 • Total Txn's Pending: ${Math.round(totalTxnsPending)} TXN (AMS: ${Math.round(statsByRegion.AMS.totalTxnsPending)}, APJ: ${Math.round(statsByRegion.APJ.totalTxnsPending)}, EMEA: ${Math.round(statsByRegion.EMEA.totalTxnsPending)})
 • Count Escalated: ${totalCountEscalated} files (APJ: ${statsByRegion.APJ.countEscalated}, AMS: ${statsByRegion.AMS.countEscalated}, EMEA: ${statsByRegion.EMEA.countEscalated})`;
 
-    // Individual Released Details (grouped by Column J)
+    // Individual Released Details (grouped by Column J / Locked By & mapped to Name + Team)
     const individualMap = new Map<string, IndividualReleasedRow>();
     releasedRows.forEach(row => {
-      const cleanName = row.individual.trim();
-      const isUnassigned = !cleanName;
-      const groupKey = isUnassigned ? '__unassigned__' : cleanName.toLowerCase();
+      const resolved = resolveLockedByPerson(row.individual, lockedByLookupMap);
+      const isUnassigned = !resolved.lockedBy;
+      const canonicalLockedBy = resolved.matched
+        ? (lockedByLookupMap.get(resolved.lockedBy)?.lockedBy || resolved.lockedBy)
+        : resolved.lockedBy;
+      const groupKey = isUnassigned
+        ? '__unassigned__'
+        : resolved.matched
+        ? `id:${canonicalLockedBy.toLowerCase()}`
+        : `raw:${resolved.lockedBy.toLowerCase()}`;
+
       let entry = individualMap.get(groupKey);
       if (!entry) {
         entry = {
           key: groupKey,
-          name: isUnassigned ? 'Unassigned (Blank Col J)' : cleanName,
+          lockedBy: isUnassigned ? 'Unassigned' : canonicalLockedBy,
+          name: isUnassigned ? 'Blank (Col J)' : resolved.name,
+          team: resolved.team,
           isUnassigned,
           releasedFiles: 0,
           totalTxnsReleased: 0,
@@ -617,7 +690,7 @@ Please find the Zyme inventory details for ${formattedDate}:
       if (a.isUnassigned !== b.isUnassigned) return a.isUnassigned ? 1 : -1;
       if (b.totalTxnsReleased !== a.totalTxnsReleased) return b.totalTxnsReleased - a.totalTxnsReleased;
       if (b.releasedFiles !== a.releasedFiles) return b.releasedFiles - a.releasedFiles;
-      return a.name.localeCompare(b.name);
+      return (a.name || a.lockedBy).localeCompare(b.name || b.lockedBy);
     });
 
     return {
@@ -638,7 +711,7 @@ Please find the Zyme inventory details for ${formattedDate}:
       reportText,
       formattedDate,
     };
-  }, [allParsedRows, selectedDate]);
+  }, [allParsedRows, selectedDate, lockedByLookupMap]);
 
   const copyToClipboard = async () => {
     if (!filteredResults.reportText) return;
@@ -732,13 +805,18 @@ Please find the Zyme inventory details for ${formattedDate}:
 
   const visibleIndividualRows = useMemo(() => {
     const q = individualSearch.toLowerCase().trim();
-    const list = q
-      ? filteredResults.individualReleasedList.filter(
-          ind =>
-            ind.name.toLowerCase().includes(q) ||
-            ind.rows.some(r => r.sessionKey.toLowerCase().includes(q))
-        )
-      : [...filteredResults.individualReleasedList];
+    const list = filteredResults.individualReleasedList.filter(ind => {
+      if (individualTeamFilter !== 'ALL' && ind.team !== individualTeamFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        ind.lockedBy.toLowerCase().includes(q) ||
+        ind.name.toLowerCase().includes(q) ||
+        ind.team.toLowerCase().includes(q) ||
+        ind.rows.some(r => r.sessionKey.toLowerCase().includes(q))
+      );
+    });
 
     list.sort((a, b) => {
       if (a.isUnassigned !== b.isUnassigned) return a.isUnassigned ? 1 : -1;
@@ -747,25 +825,27 @@ Please find the Zyme inventory details for ${formattedDate}:
         return b.totalTxnsReleased - a.totalTxnsReleased;
       }
       if (individualSort === 'name') {
-        return a.name.localeCompare(b.name);
+        return (a.name || a.lockedBy).localeCompare(b.name || b.lockedBy);
       }
       if (b.totalTxnsReleased !== a.totalTxnsReleased) return b.totalTxnsReleased - a.totalTxnsReleased;
       return b.releasedFiles - a.releasedFiles;
     });
     return list;
-  }, [filteredResults.individualReleasedList, individualSearch, individualSort]);
+  }, [filteredResults.individualReleasedList, individualSearch, individualSort, individualTeamFilter]);
 
   const copyIndividualText = async () => {
     if (visibleIndividualRows.length === 0) return;
     const sumFiles = visibleIndividualRows.reduce((s, r) => s + r.releasedFiles, 0);
     const sumTxns = visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0);
     const lines = [
-      `Individual Released Details — ${filteredResults.formattedDate} (${individualColHeader}):`,
+      `Individual Released Details — ${filteredResults.formattedDate}:`,
       '',
-      ...visibleIndividualRows.map(
-        ind =>
-          `• ${ind.name}: ${ind.releasedFiles} files / ${Math.round(ind.totalTxnsReleased)} TXN (AMS: ${ind.amsFiles}/${Math.round(ind.amsTxns)}, APJ: ${ind.apjFiles}/${Math.round(ind.apjTxns)}, EMEA: ${ind.emeaFiles}/${Math.round(ind.emeaTxns)})`
-      ),
+      ...visibleIndividualRows.map(ind => {
+        const displayPerson = ind.name
+          ? `${ind.lockedBy} — ${ind.name}${ind.team ? ` (${ind.team})` : ''}`
+          : ind.lockedBy;
+        return `• ${displayPerson}: ${ind.releasedFiles} files / ${Math.round(ind.totalTxnsReleased)} TXN (AMS: ${ind.amsFiles}/${Math.round(ind.amsTxns)}, APJ: ${ind.apjFiles}/${Math.round(ind.apjTxns)}, EMEA: ${ind.emeaFiles}/${Math.round(ind.emeaTxns)})`;
+      }),
       '',
       `Total: ${sumFiles} files / ${Math.round(sumTxns)} TXN`,
     ];
@@ -789,10 +869,12 @@ Please find the Zyme inventory details for ${formattedDate}:
       const tableHtml = `
         <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #0f172a;">
           <p style="font-size: 13px; font-weight: 700; margin: 0 0 8px 0;">Individual Released Details — ${escapeHtml(filteredResults.formattedDate)}</p>
-          <table style="width: 100%; max-width: 780px; border-collapse: collapse; font-size: 12px;">
+          <table style="width: 100%; max-width: 880px; border-collapse: collapse; font-size: 12px;">
             <thead>
               <tr style="background-color: #0f172a; color: #ffffff;">
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">${colTitle}</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Name</th>
+                <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: left;">Team</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">Files Released</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">TXNs Released</th>
                 <th style="padding: 9px 12px; border: 1px solid #1e293b; text-align: right;">AMS (Files / TXN)</th>
@@ -805,7 +887,9 @@ Please find the Zyme inventory details for ${formattedDate}:
                 .map(
                   ind => `
                 <tr style="background-color: #ffffff;">
-                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">${escapeHtml(ind.name)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #334155; font-family: monospace;">${escapeHtml(ind.lockedBy)}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #0f172a; font-weight: 600;">${escapeHtml(ind.name || '—')}</td>
+                  <td style="padding: 8px 12px; border: 1px solid #e2e8f0; color: #475569;">${escapeHtml(ind.team || '—')}</td>
                   <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.releasedFiles}</td>
                   <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; font-weight: 700; color: #047857;">${Math.round(ind.totalTxnsReleased)}</td>
                   <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${ind.amsFiles} / ${Math.round(ind.amsTxns)}</td>
@@ -815,7 +899,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                 )
                 .join('')}
               <tr style="background-color: #f1f5f9; font-weight: 700;">
-                <td style="padding: 8px 12px; border: 1px solid #e2e8f0;">Total</td>
+                <td colspan="3" style="padding: 8px 12px; border: 1px solid #e2e8f0;">Total (${visibleIndividualRows.length})</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumFiles}</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right; color: #047857;">${Math.round(sumTxns)}</td>
                 <td style="padding: 8px 12px; border: 1px solid #e2e8f0; text-align: right;">${sumAmsFiles} / ${Math.round(sumAmsTxns)}</td>
@@ -828,12 +912,12 @@ Please find the Zyme inventory details for ${formattedDate}:
       `;
 
       const plainText = [
-        `${individualColHeader}\tFiles Released\tTXNs Released\tAMS (Files/TXN)\tAPJ (Files/TXN)\tEMEA (Files/TXN)`,
+        `${individualColHeader}\tName\tTeam\tFiles Released\tTXNs Released\tAMS (Files/TXN)\tAPJ (Files/TXN)\tEMEA (Files/TXN)`,
         ...visibleIndividualRows.map(
           ind =>
-            `${ind.name}\t${ind.releasedFiles}\t${Math.round(ind.totalTxnsReleased)}\t${ind.amsFiles}/${Math.round(ind.amsTxns)}\t${ind.apjFiles}/${Math.round(ind.apjTxns)}\t${ind.emeaFiles}/${Math.round(ind.emeaTxns)}`
+            `${ind.lockedBy}\t${ind.name || ''}\t${ind.team || ''}\t${ind.releasedFiles}\t${Math.round(ind.totalTxnsReleased)}\t${ind.amsFiles}/${Math.round(ind.amsTxns)}\t${ind.apjFiles}/${Math.round(ind.apjTxns)}\t${ind.emeaFiles}/${Math.round(ind.emeaTxns)}`
         ),
-        `Total\t${sumFiles}\t${Math.round(sumTxns)}\t${sumAmsFiles}/${Math.round(sumAmsTxns)}\t${sumApjFiles}/${Math.round(sumApjTxns)}\t${sumEmeaFiles}/${Math.round(sumEmeaTxns)}`,
+        `Total\t\t\t${sumFiles}\t${Math.round(sumTxns)}\t${sumAmsFiles}/${Math.round(sumAmsTxns)}\t${sumApjFiles}/${Math.round(sumApjTxns)}\t${sumEmeaFiles}/${Math.round(sumEmeaTxns)}`,
       ].join('\n');
 
       await navigator.clipboard.write([
@@ -852,10 +936,11 @@ Please find the Zyme inventory details for ${formattedDate}:
   const resetAll = () => {
     setFileName(null);
     setAllParsedRows([]);
-    setIndividualColHeader('Individual (Col J)');
+    setIndividualColHeader('Locked By');
     setError(null);
     setShowIndividualDetails(false);
     setIndividualSearch('');
+    setIndividualTeamFilter('ALL');
     setExpandedIndividualKey(null);
     setShowDetailsTable(false);
     setDetailSearch('');
@@ -871,14 +956,18 @@ Please find the Zyme inventory details for ${formattedDate}:
 
     if (!detailSearch.trim()) return base;
     const q = detailSearch.toLowerCase().trim();
-    return base.filter(
-      r =>
+    return base.filter(r => {
+      const person = resolveLockedByPerson(r.individual, lockedByLookupMap);
+      return (
         r.sessionKey.toLowerCase().includes(q) ||
         r.region.toLowerCase().includes(q) ||
         r.status.toLowerCase().includes(q) ||
-        r.individual.toLowerCase().includes(q)
-    );
-  }, [detailsTab, filteredResults, detailSearch]);
+        r.individual.toLowerCase().includes(q) ||
+        person.name.toLowerCase().includes(q) ||
+        person.team.toLowerCase().includes(q)
+      );
+    });
+  }, [detailsTab, filteredResults, detailSearch, lockedByLookupMap]);
 
   return (
     <div className="flex-1 overflow-y-auto p-5 md:p-8 relative z-10 font-sans">
@@ -1256,7 +1345,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                 </div>
               </div>
 
-              {/* Individual Released Details Section (Column J) */}
+              {/* Individual Released Details Section (Column J: Locked By + Adjacent Name) */}
               {showIndividualDetails && (
                 <div className="px-5 py-4 border-t border-slate-200 bg-emerald-50/30 space-y-3.5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1283,6 +1372,20 @@ Please find the Zyme inventory details for ${formattedDate}:
                     </div>
 
                     <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setShowDirectoryManager(prev => !prev)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all text-xs font-semibold cursor-pointer ${
+                          showDirectoryManager
+                            ? 'bg-slate-800 text-white border-slate-900'
+                            : 'text-slate-700 bg-white hover:bg-slate-50 border-slate-200'
+                        }`}
+                        title="Add or update Locked By ID to Individual Name mappings"
+                      >
+                        <Settings size={13} />
+                        <span>Name Directory ({lockedByDirectory.length})</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={copyIndividualText}
@@ -1323,45 +1426,152 @@ Please find the Zyme inventory details for ${formattedDate}:
                     </div>
                   </div>
 
-                  {/* Search & Sort Controls */}
+                  {/* Inline Locked By -> Name Directory Manager */}
+                  {showDirectoryManager && (
+                    <div className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-3">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div>
+                          <p className="text-xs font-bold text-slate-800">
+                            Locked By → Individual Name Directory
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            Maps Column J Locked By IDs to individual names and teams across the inventory report.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleResetDirectory}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 transition-colors cursor-pointer"
+                          title="Restore default 37 directory entries"
+                        >
+                          <RotateCcw size={11} />
+                          <span>Reset Defaults</span>
+                        </button>
+                      </div>
+
+                      <form onSubmit={handleAddDirectoryEntry} className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="text"
+                          value={newDirId}
+                          onChange={(e) => setNewDirId(e.target.value)}
+                          placeholder="Locked By ID (e.g. 90052035)"
+                          className="w-40 px-2.5 py-1.5 text-xs font-mono bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                        <input
+                          type="text"
+                          value={newDirName}
+                          onChange={(e) => setNewDirName(e.target.value)}
+                          placeholder="Individual Name"
+                          className="flex-1 min-w-[160px] px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                        <select
+                          value={newDirTeam}
+                          onChange={(e) => setNewDirTeam(e.target.value)}
+                          className="px-2.5 py-1.5 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                        >
+                          <option value="BGL">BGL</option>
+                          <option value="GDL">GDL</option>
+                          <option value="">Other</option>
+                        </select>
+                        <button
+                          type="submit"
+                          disabled={!newDirId.trim() || !newDirName.trim()}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white text-xs font-bold cursor-pointer"
+                        >
+                          <Plus size={13} />
+                          <span>Add / Update</span>
+                        </button>
+                      </form>
+
+                      <div className="max-h-40 overflow-y-auto flex flex-wrap gap-1.5 pt-1">
+                        {lockedByDirectory.map(entry => (
+                          <span
+                            key={entry.lockedBy}
+                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-700"
+                          >
+                            <span className="font-mono font-bold text-slate-900">{entry.lockedBy}</span>
+                            <span className="text-slate-400">→</span>
+                            <span className="font-semibold text-slate-800">{entry.name}</span>
+                            {entry.team && (
+                              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-slate-200 text-slate-600">
+                                {entry.team}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveDirectoryEntry(entry.lockedBy)}
+                              className="text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title={`Remove ${entry.lockedBy}`}
+                            >
+                              <X size={11} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Search, Team Filter & Sort Controls */}
                   <div className="flex flex-wrap items-center justify-between gap-2.5">
-                    <div className="flex items-center gap-1 p-1 bg-white border border-slate-200 rounded-xl">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2">
-                        Sort:
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setIndividualSort('txns')}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                          individualSort === 'txns'
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        TXNs Released
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIndividualSort('files')}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                          individualSort === 'files'
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        Files Released
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIndividualSort('name')}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
-                          individualSort === 'name'
-                            ? 'bg-emerald-600 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        Name A–Z
-                      </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1 p-1 bg-white border border-slate-200 rounded-xl">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2">
+                          Sort:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setIndividualSort('txns')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                            individualSort === 'txns'
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          TXNs Released
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIndividualSort('files')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                            individualSort === 'files'
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Files Released
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIndividualSort('name')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                            individualSort === 'name'
+                              ? 'bg-emerald-600 text-white shadow-2xs'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Name A–Z
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-1 p-1 bg-white border border-slate-200 rounded-xl">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 px-2">
+                          Team:
+                        </span>
+                        {(['ALL', 'BGL', 'GDL'] as const).map(teamOpt => (
+                          <button
+                            key={teamOpt}
+                            type="button"
+                            onClick={() => setIndividualTeamFilter(teamOpt)}
+                            className={`px-2 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                              individualTeamFilter === teamOpt
+                                ? 'bg-slate-900 text-white shadow-2xs'
+                                : 'text-slate-600 hover:text-slate-900'
+                            }`}
+                          >
+                            {teamOpt === 'ALL' ? 'All' : teamOpt}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div className="relative w-full sm:w-64">
@@ -1373,18 +1583,19 @@ Please find the Zyme inventory details for ${formattedDate}:
                         type="text"
                         value={individualSearch}
                         onChange={(e) => setIndividualSearch(e.target.value)}
-                        placeholder={`Search ${individualColHeader} or session key...`}
+                        placeholder="Search Locked By, Name, Team..."
                         className="w-full pl-7 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                       />
                     </div>
                   </div>
 
-                  {/* Individual Breakdown Table */}
+                  {/* Individual Breakdown Table (Locked By + Adjacent Name) */}
                   <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
                     <table className="w-full text-xs text-left border-collapse">
                       <thead>
                         <tr className="bg-slate-900 text-slate-100">
                           <th className="py-2.5 px-3.5 font-bold">{individualColHeader}</th>
+                          <th className="py-2.5 px-3.5 font-bold">Name</th>
                           <th className="py-2.5 px-3.5 font-bold text-right">Files Released</th>
                           <th className="py-2.5 px-3.5 font-bold text-right">TXNs Released</th>
                           <th className="py-2.5 px-3.5 font-bold text-right">AMS (Files / TXN)</th>
@@ -1396,7 +1607,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                       <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
                         {visibleIndividualRows.length === 0 ? (
                           <tr>
-                            <td colSpan={7} className="p-6 text-center text-slate-400 font-sans text-xs">
+                            <td colSpan={8} className="p-6 text-center text-slate-400 font-sans text-xs">
                               No released records found for {filteredResults.formattedDate}.
                             </td>
                           </tr>
@@ -1421,24 +1632,50 @@ Please find the Zyme inventory details for ${formattedDate}:
                                     }`}
                                     title="Click to expand released files for this individual"
                                   >
-                                    <td className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
-                                      <div className="flex items-center gap-2">
+                                    <td className="py-2.5 px-3.5 font-mono font-bold text-slate-800 whitespace-nowrap">
+                                      <div className="flex items-center gap-1.5">
                                         {isExpanded ? (
                                           <ChevronUp size={13} className="text-emerald-600 flex-shrink-0" />
                                         ) : (
                                           <ChevronDown size={13} className="text-slate-400 flex-shrink-0" />
                                         )}
+                                        <span className={ind.isUnassigned ? 'italic text-slate-400 font-sans font-medium' : ''}>
+                                          {ind.lockedBy}
+                                        </span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
+                                      <div className="flex items-center gap-1.5 flex-wrap">
                                         <User
                                           size={13}
                                           className={
-                                            ind.isUnassigned
-                                              ? 'text-slate-400 flex-shrink-0'
-                                              : 'text-emerald-600 flex-shrink-0'
+                                            ind.name && !ind.isUnassigned
+                                              ? 'text-emerald-600 flex-shrink-0'
+                                              : 'text-slate-300 flex-shrink-0'
                                           }
                                         />
-                                        <span className={ind.isUnassigned ? 'italic text-slate-500 font-medium' : ''}>
-                                          {ind.name}
+                                        <span
+                                          className={
+                                            ind.name && !ind.isUnassigned
+                                              ? 'text-slate-900'
+                                              : 'italic text-slate-400 font-medium'
+                                          }
+                                        >
+                                          {ind.name || 'Unmapped ID'}
                                         </span>
+                                        {ind.team && (
+                                          <span
+                                            className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase ${
+                                              ind.team === 'BGL'
+                                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                                : ind.team === 'GDL'
+                                                ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                            }`}
+                                          >
+                                            {ind.team}
+                                          </span>
+                                        )}
                                       </div>
                                     </td>
                                     <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-800 font-semibold">
@@ -1463,7 +1700,7 @@ Please find the Zyme inventory details for ${formattedDate}:
 
                                   {isExpanded && (
                                     <tr className="bg-slate-50/90">
-                                      <td colSpan={7} className="px-4 py-3">
+                                      <td colSpan={8} className="px-4 py-3">
                                         <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto max-h-56">
                                           <table className="w-full text-[11px] text-left border-collapse">
                                             <thead className="bg-slate-100 text-slate-600 sticky top-0 border-b border-slate-200 font-sans">
@@ -1511,7 +1748,7 @@ Please find the Zyme inventory details for ${formattedDate}:
 
                             {/* Total Row */}
                             <tr className="bg-slate-50 font-bold text-slate-900 border-t-2 border-slate-200">
-                              <td className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
+                              <td colSpan={2} className="py-2.5 px-3.5 font-sans font-bold text-slate-900">
                                 Total ({visibleIndividualRows.length})
                               </td>
                               <td className="py-2.5 px-3.5 text-right tabular-nums">
@@ -1535,7 +1772,13 @@ Please find the Zyme inventory details for ${formattedDate}:
                                 {Math.round(visibleIndividualRows.reduce((s, r) => s + r.emeaTxns, 0))}
                               </td>
                               <td className="py-2.5 px-3.5 text-right tabular-nums text-slate-600">
-                                100%
+                                {filteredResults.totalTxnsReleased > 0
+                                  ? `${Math.round(
+                                      (visibleIndividualRows.reduce((s, r) => s + r.totalTxnsReleased, 0) /
+                                        filteredResults.totalTxnsReleased) *
+                                        100
+                                    )}%`
+                                  : '0%'}
                               </td>
                             </tr>
                           </>
@@ -1612,7 +1855,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                           type="text"
                           value={detailSearch}
                           onChange={(e) => setDetailSearch(e.target.value)}
-                          placeholder="Filter session keys or individual..."
+                          placeholder="Filter session keys, Locked By, Name..."
                           className="w-full pl-7 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                         />
                       </div>
@@ -1625,6 +1868,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                             <th className="py-2 px-3 font-semibold">Session Key</th>
                             <th className="py-2 px-3 font-semibold">Region</th>
                             <th className="py-2 px-3 font-semibold">{individualColHeader}</th>
+                            <th className="py-2 px-3 font-semibold">Name</th>
                             <th className="py-2 px-3 font-semibold">Status</th>
                             <th className="py-2 px-3 font-semibold">Last Changed (UTC)</th>
                             <th className="py-2 px-3 font-semibold text-right">Released TXNs</th>
@@ -1634,34 +1878,51 @@ Please find the Zyme inventory details for ${formattedDate}:
                         <tbody className="divide-y divide-slate-100 font-mono text-[10px]">
                           {activeDetailRows.length === 0 ? (
                             <tr>
-                              <td colSpan={7} className="p-4 text-center text-slate-400 font-sans">
+                              <td colSpan={8} className="p-4 text-center text-slate-400 font-sans">
                                 No records matching view.
                               </td>
                             </tr>
                           ) : (
-                            activeDetailRows.map((r, i) => (
-                              <tr key={i} className="hover:bg-slate-50/70">
-                                <td className="py-1.5 px-3 font-bold text-slate-900">
-                                  {r.sessionKey}
-                                </td>
-                                <td className="py-1.5 px-3 font-sans font-medium text-slate-700">
-                                  {r.region}
-                                </td>
-                                <td className="py-1.5 px-3 font-sans font-semibold text-slate-800">
-                                  {r.individual || '—'}
-                                </td>
-                                <td className="py-1.5 px-3 text-slate-600 font-sans">{r.status || '—'}</td>
-                                <td className="py-1.5 px-3 text-slate-500 tabular-nums">
-                                  {r.lastChangedRaw || '—'}
-                                </td>
-                                <td className="py-1.5 px-3 text-right tabular-nums text-slate-900 font-bold">
-                                  {Math.round(r.releasedItemCount)}
-                                </td>
-                                <td className="py-1.5 px-3 text-right tabular-nums text-rose-600 font-bold">
-                                  {Math.round(r.blockedItemCount)}
-                                </td>
-                              </tr>
-                            ))
+                            activeDetailRows.map((r, i) => {
+                              const person = resolveLockedByPerson(r.individual, lockedByLookupMap);
+                              return (
+                                <tr key={i} className="hover:bg-slate-50/70">
+                                  <td className="py-1.5 px-3 font-bold text-slate-900">
+                                    {r.sessionKey}
+                                  </td>
+                                  <td className="py-1.5 px-3 font-sans font-medium text-slate-700">
+                                    {r.region}
+                                  </td>
+                                  <td className="py-1.5 px-3 font-mono font-semibold text-slate-700">
+                                    {person.lockedBy || '—'}
+                                  </td>
+                                  <td className="py-1.5 px-3 font-sans font-semibold text-slate-900">
+                                    {person.name ? (
+                                      <span className="inline-flex items-center gap-1">
+                                        <span>{person.name}</span>
+                                        {person.team && (
+                                          <span className="text-[9px] font-bold px-1 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                                            {person.team}
+                                          </span>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-400">—</span>
+                                    )}
+                                  </td>
+                                  <td className="py-1.5 px-3 text-slate-600 font-sans">{r.status || '—'}</td>
+                                  <td className="py-1.5 px-3 text-slate-500 tabular-nums">
+                                    {r.lastChangedRaw || '—'}
+                                  </td>
+                                  <td className="py-1.5 px-3 text-right tabular-nums text-slate-900 font-bold">
+                                    {Math.round(r.releasedItemCount)}
+                                  </td>
+                                  <td className="py-1.5 px-3 text-right tabular-nums text-rose-600 font-bold">
+                                    {Math.round(r.blockedItemCount)}
+                                  </td>
+                                </tr>
+                              );
+                            })
                           )}
                         </tbody>
                       </table>
