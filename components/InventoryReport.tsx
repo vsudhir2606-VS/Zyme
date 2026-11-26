@@ -635,7 +635,7 @@ Please find the Zyme inventory details for ${formattedDate}:
 • Total Txn's Released: ${Math.round(totalTxnsReleased)} Transactions (AMS: ${statsByRegion.AMS.releasedFiles} files / ${Math.round(statsByRegion.AMS.totalTxnsReleased)} TXN, APJ: ${statsByRegion.APJ.releasedFiles} files / ${Math.round(statsByRegion.APJ.totalTxnsReleased)} TXN, EMEA: ${statsByRegion.EMEA.releasedFiles} files / ${Math.round(statsByRegion.EMEA.totalTxnsReleased)} TXN)
 • Total Pending Files: ${totalPendingFiles} files (AMS: ${statsByRegion.AMS.totalPendingFiles}, APJ: ${statsByRegion.APJ.totalPendingFiles}, EMEA: ${statsByRegion.EMEA.totalPendingFiles})
 • Total Txn's Pending: ${Math.round(totalTxnsPending)} TXN (AMS: ${Math.round(statsByRegion.AMS.totalTxnsPending)}, APJ: ${Math.round(statsByRegion.APJ.totalTxnsPending)}, EMEA: ${Math.round(statsByRegion.EMEA.totalTxnsPending)})
-• Count Escalated: ${totalCountEscalated} files (APJ: ${statsByRegion.APJ.countEscalated}, AMS: ${statsByRegion.AMS.countEscalated}, EMEA: ${statsByRegion.EMEA.countEscalated})`;
+• Pending Count: ${totalCountEscalated} files (APJ: ${statsByRegion.APJ.countEscalated}, AMS: ${statsByRegion.AMS.countEscalated}, EMEA: ${statsByRegion.EMEA.countEscalated})`;
 
     // Individual Released Details (grouped by Column J / Locked By & mapped to Name + Team)
     const individualMap = new Map<string, IndividualReleasedRow>();
@@ -733,7 +733,7 @@ Please find the Zyme inventory details for ${formattedDate}:
               <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Txn's Released</th>
               <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Pending Files</th>
               <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Total Txn's Pending</th>
-              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Count Escalated</th>
+              <th style="padding: 10px 14px; border: 1px solid #1e293b; text-align: right;">Pending Count</th>
             </tr>
           </thead>
           <tbody>
@@ -770,7 +770,7 @@ Please find the Zyme inventory details for ${formattedDate}:
         </div>
       `;
 
-      const plainTextWithTable = `${filteredResults.reportText}\n\nRegion\tTotal Files Released\tTotal Txn's Released\tTotal Pending Files\tTotal Txn's Pending\tCount Escalated\n${filteredResults.regionalRows
+      const plainTextWithTable = `${filteredResults.reportText}\n\nRegion\tTotal Files Released\tTotal Txn's Released\tTotal Pending Files\tTotal Txn's Pending\tPending Count\n${filteredResults.regionalRows
         .map(
           r =>
             `${r.region}\t${r.releasedFiles}\t${Math.round(
@@ -1106,7 +1106,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                 <span className="font-bold text-slate-700 block text-xs">Included Columns:</span>
                 <p>• Total Files Released &amp; Total Txn's Released</p>
                 <p>• Total Pending Files &amp; Total Txn's Pending</p>
-                <p>• Count Escalated</p>
+                <p>• Pending Count</p>
               </div>
             </div>
           </div>
@@ -1187,7 +1187,7 @@ Please find the Zyme inventory details for ${formattedDate}:
               <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-xs flex flex-col justify-between col-span-2 md:col-span-1">
                 <div className="flex items-center gap-1.5 text-slate-500">
                   <AlertTriangle size={14} className="text-amber-600" />
-                  <span className="text-[11px] font-bold uppercase tracking-wider">Count Escalated</span>
+                  <span className="text-[11px] font-bold uppercase tracking-wider">Pending Count</span>
                 </div>
                 <div className="my-2">
                   <span className="text-2xl font-black text-amber-600 font-mono tabular-nums">
@@ -1288,7 +1288,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                         <th className="py-2.5 px-4 font-bold text-right">Total Txn's Released</th>
                         <th className="py-2.5 px-4 font-bold text-right">Total Pending Files</th>
                         <th className="py-2.5 px-4 font-bold text-right">Total Txn's Pending</th>
-                        <th className="py-2.5 px-4 font-bold text-right">Count Escalated</th>
+                        <th className="py-2.5 px-4 font-bold text-right">Pending Count</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
@@ -1800,7 +1800,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                     {showDetailsTable ? 'Hide underlying records' : 'Inspect underlying records'}
                   </span>
                   <span className="text-slate-400 font-normal">
-                    ({filteredResults.releasedRows.length} released · {filteredResults.inProcessRows.length} pending · {filteredResults.escalatedRows.length} escalated)
+                    ({filteredResults.releasedRows.length} released · {filteredResults.inProcessRows.length} pending · {filteredResults.escalatedRows.length} pending count)
                   </span>
                 </button>
 
@@ -1840,7 +1840,7 @@ Please find the Zyme inventory details for ${formattedDate}:
                               : 'text-slate-500 hover:text-slate-800'
                           }`}
                         >
-                          Escalated ({filteredResults.escalatedRows.length})
+                          Pending Count ({filteredResults.escalatedRows.length})
                         </button>
                       </div>
 
