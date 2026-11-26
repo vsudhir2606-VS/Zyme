@@ -28,7 +28,7 @@ import {
 import { InventoryReport } from './components/InventoryReport.tsx';
 
 // Default values
-const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY'];
+const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP'];
 const DEFAULT_RISK_KEYWORDS = [
   'SANCTION', 'EMBARGO', 'DENIED',
   'Lockheed', 'Raytheon', 'Northrop', 'Bae', 'RTX', 'United Technologies', 'UTC', 'Rockwell',
@@ -427,7 +427,18 @@ export default function App() {
   const [aprvCodes, setAprvCodes] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('zyme_aprvCodes');
-      return saved ? JSON.parse(saved) : DEFAULT_APRV_CODES;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          if (!localStorage.getItem('zyme_aprvCodes_sy_removed_v1')) {
+            localStorage.setItem('zyme_aprvCodes_sy_removed_v1', '1');
+            return parsed.filter((code: string) => String(code).trim().toUpperCase() !== 'SY');
+          }
+          return parsed;
+        }
+      }
+      localStorage.setItem('zyme_aprvCodes_sy_removed_v1', '1');
+      return DEFAULT_APRV_CODES;
     } catch (e) {
       console.error('Failed to load APRV codes', e);
       return DEFAULT_APRV_CODES;

@@ -35,7 +35,7 @@ const LEGACY_MATCH_ENGINE_STORAGE_KEY = 'zyme_live_match_config_v1';
 export const MATCH_ENGINE_UPDATED_EVENT = 'zyme:live-match-config-updated';
 
 export const DEFAULT_APRV_COUNTRY_CODES: string[] = [
-  'RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY',
+  'RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP',
 ];
 
 export const DEFAULT_HIGH_RISK_KEYWORDS: string[] = [

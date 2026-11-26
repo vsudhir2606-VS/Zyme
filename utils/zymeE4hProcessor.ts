@@ -124,7 +124,7 @@ export interface ZymeE4hResult {
   sheet2CsvContent: string;
 }
 
-export const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP', 'SY'];
+export const DEFAULT_APRV_CODES = ['RU', 'UA', 'NI', 'VE', 'BY', 'CU', 'IR', 'KP'];
 export const DEFAULT_RISK_KEYWORDS = [
   'SANCTION', 'EMBARGO', 'DENIED',
   'Lockheed', 'Raytheon', 'Northrop', 'Bae', 'RTX', 'United Technologies', 'UTC', 'Rockwell',
